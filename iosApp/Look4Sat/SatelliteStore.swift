@@ -19,8 +19,11 @@ struct PredictedPass: Sendable {
 }
 
 struct TrackedPosition: Sendable {
+    let timeMillis: Int64
     let azimuthDegrees: Double
     let elevationDegrees: Double
+    let latitudeDegrees: Double
+    let longitudeDegrees: Double
     let altitudeKilometers: Double
     let distanceKilometers: Double
     let isAboveHorizon: Bool
@@ -81,6 +84,10 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
             $0.name.localizedCaseInsensitiveContains(query)
                 || String($0.catalogNumber).contains(query)
         }.prefix(100).map { $0 }
+    }
+
+    var trackedSatellites: [SatelliteTarget] {
+        satellites.filter { selectedIDs.contains($0.catalogNumber) }
     }
 
     var locationDescription: String {
@@ -185,8 +192,11 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
                     startTimeMillis: now
                 )
                 let reading = TrackedPosition(
+                    timeMillis: now,
                     azimuthDegrees: position.azimuthDegrees,
                     elevationDegrees: position.elevationDegrees,
+                    latitudeDegrees: position.latitudeDegrees,
+                    longitudeDegrees: position.longitudeDegrees,
                     altitudeKilometers: position.altitudeKilometers,
                     distanceKilometers: position.distanceKilometers,
                     isAboveHorizon: position.isAboveHorizon
@@ -220,6 +230,49 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
 
     func position(for satellite: SatelliteTarget) -> TrackedPosition? {
         positions[satellite.catalogNumber]
+    }
+
+    func satellite(withID id: Int32) -> SatelliteTarget? {
+        satellites.first { $0.catalogNumber == id }
+    }
+
+    func trajectory(
+        for satelliteID: Int32,
+        startTimeMillis: Int64,
+        endTimeMillis: Int64,
+        stepMillis: Int64
+    ) async -> [TrackedPosition] {
+        guard let satellite = satellite(withID: satelliteID) else { return [] }
+        let input = PredictionInput(satellite: satellite)
+        let latitude = location?.coordinate.latitude ?? 0
+        let longitude = location?.coordinate.longitude ?? 0
+        let altitude = location?.altitude ?? 0
+        let step = max(1_000, stepMillis)
+
+        return await Task.detached(priority: .utility) {
+            var positions: [TrackedPosition] = []
+            var time = startTimeMillis
+            while time <= endTimeMillis {
+                let position = input.satellite.currentPosition(
+                    latitude: latitude,
+                    longitude: longitude,
+                    altitudeMeters: altitude,
+                    timeMillis: time
+                )
+                positions.append(TrackedPosition(
+                    timeMillis: time,
+                    azimuthDegrees: position.azimuthDegrees,
+                    elevationDegrees: position.elevationDegrees,
+                    latitudeDegrees: position.latitudeDegrees,
+                    longitudeDegrees: position.longitudeDegrees,
+                    altitudeKilometers: position.altitudeKilometers,
+                    distanceKilometers: position.distanceKilometers,
+                    isAboveHorizon: position.isAboveHorizon
+                ))
+                time += step
+            }
+            return positions
+        }.value
     }
 
     func formattedTime(_ milliseconds: Int64, dateStyle: DateFormatter.Style = .medium) -> String {

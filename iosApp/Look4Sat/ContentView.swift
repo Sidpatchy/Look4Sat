@@ -2,7 +2,7 @@ import Foundation
 import Look4SatShared
 import SwiftUI
 
-private enum SkyPalette {
+enum SkyPalette {
     static let ink = Color(red: 0.025, green: 0.035, blue: 0.09)
     static let violet = Color(red: 0.50, green: 0.42, blue: 1.0)
     static let cyan = Color(red: 0.32, green: 0.88, blue: 0.95)
@@ -11,26 +11,68 @@ private enum SkyPalette {
 
 struct ContentView: View {
     @ObservedObject var store: SatelliteStore
+    @State private var selectedTab: Look4SatTab = .passes
+    @State private var selectedSatelliteID: Int32 = 25544
 
     var body: some View {
         ZStack {
             Starfield()
                 .ignoresSafeArea()
-            TabView {
-                NavigationStack { PassesView(store: store) }
+            TabView(selection: $selectedTab) {
+                NavigationStack { PassesView(store: store, onSelectSatellite: openRadar) }
                     .tabItem { Label("Passes", systemImage: "sparkles") }
-                NavigationStack { SatellitesView(store: store) }
+                    .tag(Look4SatTab.passes)
+                NavigationStack { SatellitesView(store: store, onSelectSatellite: openRadar) }
                     .tabItem { Label("Satellites", systemImage: "satellite") }
+                    .tag(Look4SatTab.satellites)
+                NavigationStack {
+                    RadarView(
+                        store: store,
+                        selectedSatelliteID: selectedSatelliteID,
+                        onSelectSatellite: selectSatellite
+                    )
+                }
+                .tabItem { Label("Radar", systemImage: "dot.scope") }
+                .tag(Look4SatTab.radar)
+                NavigationStack {
+                    OrbitMapView(
+                        store: store,
+                        selectedSatelliteID: selectedSatelliteID,
+                        onSelectSatellite: openRadar
+                    )
+                }
+                .tabItem { Label("Map", systemImage: "map") }
+                .tag(Look4SatTab.map)
                 NavigationStack { SettingsView(store: store) }
                     .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
+                    .tag(Look4SatTab.settings)
             }
             .tint(SkyPalette.cyan)
         }
     }
+
+    private func selectSatellite(_ satellite: SatelliteTarget) {
+        if !store.isSelected(satellite) { store.toggle(satellite) }
+        selectedSatelliteID = satellite.catalogNumber
+    }
+
+    private func openRadar(_ satellite: SatelliteTarget) {
+        selectSatellite(satellite)
+        selectedTab = .radar
+    }
+}
+
+private enum Look4SatTab: Hashable {
+    case passes
+    case satellites
+    case radar
+    case map
+    case settings
 }
 
 private struct PassesView: View {
     @ObservedObject var store: SatelliteStore
+    let onSelectSatellite: (SatelliteTarget) -> Void
 
     var body: some View {
         ScrollView {
@@ -39,11 +81,15 @@ private struct PassesView: View {
                 if store.location == nil {
                     locationPrompt
                 } else if let next = store.passes.first {
-                    featuredPass(next)
+                    Button { onSelectSatellite(next.satellite) } label: { featuredPass(next) }
+                        .buttonStyle(.plain)
                     if store.passes.count > 1 {
                         VStack(alignment: .leading, spacing: 12) {
                             sectionTitle("UP NEXT", detail: "Your selected satellites")
-                            ForEach(store.passes.dropFirst()) { item in passRow(item) }
+                            ForEach(store.passes.dropFirst()) { item in
+                                Button { onSelectSatellite(item.satellite) } label: { passRow(item) }
+                                    .buttonStyle(.plain)
+                            }
                         }
                     }
                 } else if store.isLoading {
@@ -250,6 +296,7 @@ private struct PassesView: View {
 
 private struct SatellitesView: View {
     @ObservedObject var store: SatelliteStore
+    let onSelectSatellite: (SatelliteTarget) -> Void
 
     var body: some View {
         VStack(spacing: 14) {
@@ -294,11 +341,15 @@ private struct SatellitesView: View {
                 List {
                     if store.searchText.isEmpty {
                         Section("TRACKING  ·  \(store.selectedIDs.count)") {
-                            ForEach(store.filteredSatellites, id: \.catalogNumber) { satellite in satelliteRow(satellite) }
+                            ForEach(store.filteredSatellites, id: \.catalogNumber) { satellite in
+                                satelliteRow(satellite, onSelectSatellite: onSelectSatellite)
+                            }
                         }
                     } else {
                         Section("RESULTS") {
-                            ForEach(store.filteredSatellites, id: \.catalogNumber) { satellite in satelliteRow(satellite) }
+                            ForEach(store.filteredSatellites, id: \.catalogNumber) { satellite in
+                                satelliteRow(satellite, onSelectSatellite: onSelectSatellite)
+                            }
                         }
                     }
                 }
@@ -313,38 +364,52 @@ private struct SatellitesView: View {
         .toolbar(.hidden, for: .navigationBar)
     }
 
-    private func satelliteRow(_ satellite: SatelliteTarget) -> some View {
+    private func satelliteRow(
+        _ satellite: SatelliteTarget,
+        onSelectSatellite: @escaping (SatelliteTarget) -> Void
+    ) -> some View {
         let selected = store.isSelected(satellite)
         let detail = store.position(for: satellite).map {
             "EL  \(String(format: "%+.0f°", $0.elevationDegrees))  ·  NORAD  \(satellite.catalogNumber)"
         } ?? "NORAD  \(satellite.catalogNumber)  ·  \(satellite.isDeepSpace ? "DEEP SPACE" : "LEO")"
-        return Button { store.toggle(satellite) } label: {
-            HStack(spacing: 13) {
-                ZStack {
-                    Circle().fill(selected ? SkyPalette.cyan.opacity(0.16) : .white.opacity(0.06))
-                        .frame(width: 40, height: 40)
-                    Image(systemName: "satellite")
-                        .font(.system(size: 16))
-                        .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(satellite.name)
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text(detail)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+        return HStack(spacing: 12) {
+            Button { onSelectSatellite(satellite) } label: {
+                HStack(spacing: 13) {
+                    ZStack {
+                        Circle().fill(selected ? SkyPalette.cyan.opacity(0.16) : .white.opacity(0.06))
+                            .frame(width: 40, height: 40)
+                        Image(systemName: "satellite")
+                            .font(.system(size: 16))
+                            .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
+                    }
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(satellite.name)
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
+                        Text(detail)
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(SkyPalette.muted)
+                    }
+                    Spacer(minLength: 5)
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(SkyPalette.muted)
                 }
-                Spacer(minLength: 5)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            Button { store.toggle(satellite) } label: {
                 Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle")
                     .font(.system(size: 21))
                     .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
+                    .frame(width: 34, height: 42)
+                    .contentShape(Rectangle())
             }
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .accessibilityLabel(selected ? "Stop tracking \(satellite.name)" : "Track \(satellite.name)")
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 5)
         .listRowBackground(Color.clear)
         .listRowSeparatorTint(.white.opacity(0.08))
     }
@@ -492,7 +557,7 @@ private struct Starfield: View {
     }
 }
 
-private extension View {
+extension View {
     @ViewBuilder
     func orbitalGlass(cornerRadius: CGFloat = 26) -> some View {
         if #available(iOS 26.0, *) {

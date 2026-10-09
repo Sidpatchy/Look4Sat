@@ -37,6 +37,12 @@ class SatelliteTarget internal constructor(private val data: OrbitalData) {
         return SatellitePosition(
             azimuthDegrees = position.azimuth * 180.0 / PI,
             elevationDegrees = position.elevation * 180.0 / PI,
+            latitudeDegrees = position.latitude * 180.0 / PI,
+            longitudeDegrees = if (position.longitude * 180.0 / PI > 180.0) {
+                position.longitude * 180.0 / PI - 360.0
+            } else {
+                position.longitude * 180.0 / PI
+            },
             altitudeKilometers = position.altitude,
             distanceKilometers = position.distance,
             isAboveHorizon = position.aboveHorizon
@@ -141,6 +147,8 @@ class SatelliteTarget internal constructor(private val data: OrbitalData) {
 data class SatellitePosition(
     val azimuthDegrees: Double,
     val elevationDegrees: Double,
+    val latitudeDegrees: Double,
+    val longitudeDegrees: Double,
     val altitudeKilometers: Double,
     val distanceKilometers: Double,
     val isAboveHorizon: Boolean
