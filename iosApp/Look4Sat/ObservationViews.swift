@@ -262,6 +262,8 @@ private final class RadarOrientationManager: ObservableObject {
     var northReference: String { sample.northReference }
 
     private let motionManager = CMMotionManager()
+    private var recentAzimuths: [Double] = []
+    private var recentElevations: [Double] = []
 
     func start() {
         guard !motionManager.isDeviceMotionActive, motionManager.isDeviceMotionAvailable else { return }
@@ -290,21 +292,26 @@ private final class RadarOrientationManager: ObservableObject {
             let elevation = attitude.pitch * 180 / .pi
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.recentAzimuths.append(azimuth)
+                self.recentElevations.append(elevation)
+                if self.recentAzimuths.count > 5 { self.recentAzimuths.removeFirst() }
+                if self.recentElevations.count > 5 { self.recentElevations.removeFirst() }
+                let filteredAzimuth = Self.circularMean(self.recentAzimuths)
+                let filteredElevation = self.recentElevations.reduce(0, +) / Double(self.recentElevations.count)
                 var updated = self.sample
                 if !updated.isAvailable {
-                    updated.azimuthDegrees = azimuth
-                    updated.rotationHeadingDegrees = azimuth
-                    updated.elevationDegrees = elevation
+                    updated.azimuthDegrees = filteredAzimuth
+                    updated.rotationHeadingDegrees = filteredAzimuth
+                    updated.elevationDegrees = filteredElevation
                 } else {
-                    let delta = (azimuth - updated.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
-                    if abs(delta) >= 0.2 {
-                        let movement = delta * 0.45
-                        updated.rotationHeadingDegrees += movement
-                        updated.azimuthDegrees = (updated.azimuthDegrees + movement + 360).truncatingRemainder(dividingBy: 360)
+                    let delta = (filteredAzimuth - updated.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
+                    if abs(delta) >= 0.15 {
+                        updated.rotationHeadingDegrees += delta
+                        updated.azimuthDegrees = (updated.azimuthDegrees + delta + 360).truncatingRemainder(dividingBy: 360)
                     }
-                    let elevationDelta = elevation - updated.elevationDegrees
-                    if abs(elevationDelta) >= 0.15 {
-                        updated.elevationDegrees += elevationDelta * 0.45
+                    let elevationDelta = filteredElevation - updated.elevationDegrees
+                    if abs(elevationDelta) >= 0.2 {
+                        updated.elevationDegrees = filteredElevation
                     }
                 }
                 updated.isAvailable = true
@@ -317,7 +324,18 @@ private final class RadarOrientationManager: ObservableObject {
         if motionManager.isDeviceMotionActive {
             motionManager.stopDeviceMotionUpdates()
         }
+        recentAzimuths.removeAll(keepingCapacity: true)
+        recentElevations.removeAll(keepingCapacity: true)
         sample.isAvailable = false
+    }
+
+    private static func circularMean(_ angles: [Double]) -> Double {
+        guard !angles.isEmpty else { return 0 }
+        let radians = angles.map { $0 * .pi / 180 }
+        let sine = radians.reduce(0) { $0 + sin($1) }
+        let cosine = radians.reduce(0) { $0 + cos($1) }
+        let degrees = atan2(sine, cosine) * 180 / .pi
+        return (degrees + 360).truncatingRemainder(dividingBy: 360)
     }
 }
 
