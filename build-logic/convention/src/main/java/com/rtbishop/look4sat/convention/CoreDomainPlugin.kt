@@ -38,6 +38,10 @@ internal class CoreDomainPlugin : Plugin<Project> {
                 baseName = "Look4SatShared"
                 isStatic = true
             }
+            iosX64().binaries.framework {
+                baseName = "Look4SatShared"
+                isStatic = true
+            }
             val commonMain = sourceSets.getByName("commonMain")
             commonMain.kotlin.srcDir("src/main/java")
             val jvmMain = sourceSets.getByName("jvmMain")

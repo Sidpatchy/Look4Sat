@@ -24,6 +24,9 @@ jobs:
       - name: Test shared domain
         run: ./gradlew :core:domain:jvmTest
 
+      - name: Stop Gradle before Xcode
+        run: ./gradlew --stop
+
       - name: Build iOS simulator app
         run: >-
           xcodebuild
