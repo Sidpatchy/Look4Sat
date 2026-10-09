@@ -149,8 +149,8 @@ struct Look4SatPreferences: Sendable, Equatable {
 struct PassFilterSettings: Sendable, Equatable {
     var hoursAhead = 24
     var minimumElevation = 16.0
-    var lowHighlightElevation = 16.0
-    var highHighlightElevation = 65.0
+    var lowHighlightElevation = 15.0
+    var highHighlightElevation = 45.0
     var aosStartMinute = 0
     var aosEndMinute = 1_439
     var invertAosTimeWindow = false
@@ -163,8 +163,8 @@ struct PassFilterSettings: Sendable, Equatable {
         return PassFilterSettings(
             hoursAhead: defaults.object(forKey: "passHoursAhead") as? Int ?? 24,
             minimumElevation: defaults.object(forKey: "passMinimumElevation") as? Double ?? 16,
-            lowHighlightElevation: defaults.object(forKey: "lowHighlightElevation") as? Double ?? 16,
-            highHighlightElevation: defaults.object(forKey: "highHighlightElevation") as? Double ?? 65,
+            lowHighlightElevation: defaults.object(forKey: "lowHighlightElevation") as? Double ?? 15,
+            highHighlightElevation: defaults.object(forKey: "highHighlightElevation") as? Double ?? 45,
             aosStartMinute: defaults.object(forKey: "aosStartMinute") as? Int ?? 0,
             aosEndMinute: defaults.object(forKey: "aosEndMinute") as? Int ?? 1_439,
             invertAosTimeWindow: defaults.bool(forKey: "invertAosTimeWindow"),
@@ -348,6 +348,14 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
             return passes.filter { $0.satellite.catalogNumber == catalogNumber }
         }
         return passes.filter { matchesSatellite($0.satellite, query: query) }
+    }
+
+    func relevantPass(for satelliteID: Int32) -> PassItem? {
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        let satellitePasses = passes.filter { $0.satellite.catalogNumber == satelliteID }
+        return satellitePasses.first {
+            $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
+        } ?? satellitePasses.first { $0.prediction.aosTimeMillis > now }
     }
 
     var locationDescription: String {

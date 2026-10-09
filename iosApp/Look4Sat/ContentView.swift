@@ -22,6 +22,34 @@ enum SkyPalette {
             : UIColor(red: 0.0, green: 0.40, blue: 0.50, alpha: 1)
     })
     static let muted = Color(uiColor: .secondaryLabel)
+
+    static func elevationColor(_ elevation: Double, low: Double, high: Double) -> Color {
+        let lowThreshold = min(low, high)
+        let highThreshold = max(low, high)
+        if elevation < lowThreshold { return Color(red: 0.94, green: 0.33, blue: 0.31) }
+        if elevation < highThreshold { return Color(red: 1.0, green: 0.76, blue: 0.03) }
+        return Color(red: 0.30, green: 0.69, blue: 0.32)
+    }
+}
+
+struct ElevationAngleSymbol: View {
+    let color: Color
+
+    var body: some View {
+        Canvas { context, size in
+            let vertex = CGPoint(x: size.width * 0.14, y: size.height * 0.86)
+            var angle = Path()
+            angle.move(to: vertex)
+            angle.addLine(to: CGPoint(x: size.width * 0.91, y: vertex.y))
+            angle.move(to: vertex)
+            angle.addLine(to: CGPoint(x: size.width * 0.78, y: size.height * 0.12))
+            context.stroke(angle, with: .color(color), style: StrokeStyle(lineWidth: 1.8, lineCap: .round))
+            let point = Path(ellipseIn: CGRect(x: vertex.x - 1.5, y: vertex.y - 1.5, width: 3, height: 3))
+            context.fill(point, with: .color(color))
+        }
+        .frame(width: 16, height: 16)
+        .accessibilityHidden(true)
+    }
 }
 
 struct ContentView: View {
@@ -243,6 +271,10 @@ private struct PassesView: View {
     private func featuredPass(_ item: PassItem) -> some View {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let isInProgress = item.prediction.aosTimeMillis <= now && item.prediction.losTimeMillis > now
+        let passDuration = max(1, item.prediction.losTimeMillis - item.prediction.aosTimeMillis)
+        let passProgress = isInProgress
+            ? Double(now - item.prediction.aosTimeMillis) / Double(passDuration)
+            : 0
         return VStack(alignment: .leading, spacing: 20) {
             HStack {
                 Label(isInProgress ? "PASS IN PROGRESS" : "NEXT PASS", systemImage: "arrow.up.right")
@@ -259,15 +291,17 @@ private struct PassesView: View {
                     .font(.system(size: 25, weight: .bold, design: .rounded))
                     .foregroundStyle(SkyPalette.primary)
                     .lineLimit(2)
-                Text(isInProgress
-                    ? "LOS  \(store.formattedTime(item.prediction.losTimeMillis, dateStyle: .none))"
-                    : store.formattedTime(item.prediction.aosTimeMillis))
+                Text("AOS  \(store.formattedTime(item.prediction.aosTimeMillis, dateStyle: .none))   ·   LOS  \(store.formattedTime(item.prediction.losTimeMillis, dateStyle: .none))")
                     .font(.subheadline)
                     .foregroundStyle(SkyPalette.muted)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.78)
             }
-            OrbitArt(progress: 0.58)
-                .frame(height: 94)
-                .accessibilityHidden(true)
+            PassProfile(
+                maximumElevation: item.prediction.maximumElevationDegrees,
+                progress: min(1, max(0, passProgress)),
+                color: elevationColor(item.prediction.maximumElevationDegrees)
+            )
             if let position = store.position(for: item.satellite) {
                 HStack(spacing: 7) {
                     Circle()
@@ -317,9 +351,16 @@ private struct PassesView: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(SkyPalette.primary)
                     .lineLimit(1)
+                HStack(spacing: 4) {
+                    ElevationAngleSymbol(color: elevationColor(item.prediction.maximumElevationDegrees))
                 Text("MAX  \(String(format: "%.0f°", item.prediction.maximumElevationDegrees))  ·  \(duration(item.prediction.losTimeMillis - item.prediction.aosTimeMillis))")
                     .font(.caption)
                     .foregroundStyle(elevationColor(item.prediction.maximumElevationDegrees))
+                Text("AOS \(store.formattedTime(item.prediction.aosTimeMillis, dateStyle: .none))  ·  LOS \(store.formattedTime(item.prediction.losTimeMillis, dateStyle: .none))")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(SkyPalette.muted)
+                    .lineLimit(1)
+                }
             }
             Spacer()
             Text(time)
@@ -368,9 +409,11 @@ private struct PassesView: View {
     }
 
     private func elevationColor(_ elevation: Double) -> Color {
-        if elevation >= store.passFilters.highHighlightElevation { return SkyPalette.cyan }
-        if elevation >= store.passFilters.lowHighlightElevation { return .yellow }
-        return .orange
+        SkyPalette.elevationColor(
+            elevation,
+            low: store.passFilters.lowHighlightElevation,
+            high: store.passFilters.highHighlightElevation
+        )
     }
 }
 
@@ -478,6 +521,7 @@ private struct SatellitesView: View {
         let detail = store.position(for: satellite).map {
             "EL  \(String(format: "%+.0f°", $0.elevationDegrees))  ·  NORAD  \(satellite.catalogNumber)"
         } ?? "NORAD  \(satellite.catalogNumber)  ·  \(satellite.isDeepSpace ? "DEEP SPACE" : "LEO")"
+        let pass = store.relevantPass(for: satellite.catalogNumber)
         return HStack(spacing: 12) {
             Button { onSelectSatellite(satellite) } label: {
                 HStack(spacing: 13) {
@@ -496,6 +540,13 @@ private struct SatellitesView: View {
                         Text(detail)
                             .font(.system(size: 10, weight: .medium, design: .monospaced))
                             .foregroundStyle(SkyPalette.muted)
+                        if let pass {
+                            Text("AOS \(store.formattedTime(pass.prediction.aosTimeMillis, dateStyle: .none)) · LOS \(store.formattedTime(pass.prediction.losTimeMillis, dateStyle: .none))")
+                                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                                .foregroundStyle(SkyPalette.cyan)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
                     }
                     Spacer(minLength: 5)
                     Image(systemName: "chevron.right")
@@ -736,42 +787,71 @@ private struct SatelliteModesSheetButton: View {
     }
 }
 
-private struct OrbitArt: View {
-    var progress: CGFloat
+private struct PassProfile: View {
+    let maximumElevation: Double
+    let progress: Double
+    let color: Color
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width
             let height = geometry.size.height
-            ZStack {
+            let horizonY = height * 0.76
+            let normalizedElevation = CGFloat(min(90, max(0, maximumElevation)) / 90)
+            let peakHeight = height * (0.12 + 0.5 * normalizedElevation)
+            let peakY = horizonY - peakHeight
+            let profileProgress = CGFloat(progress)
+            let x = width * profileProgress
+            let oneMinusProgress = 1 - profileProgress
+            let y = oneMinusProgress * oneMinusProgress * oneMinusProgress * horizonY
+                + 3 * oneMinusProgress * oneMinusProgress * profileProgress * peakY
+                + 3 * oneMinusProgress * profileProgress * profileProgress * peakY
+                + profileProgress * profileProgress * profileProgress * horizonY
+
+            ZStack(alignment: .topLeading) {
                 Path { path in
-                    path.move(to: CGPoint(x: 0, y: height * 0.78))
+                    path.move(to: CGPoint(x: 0, y: horizonY))
+                    path.addLine(to: CGPoint(x: width, y: horizonY))
+                }
+                .stroke(SkyPalette.muted.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 4]))
+
+                Path { path in
+                    path.move(to: CGPoint(x: 0, y: horizonY))
                     path.addCurve(
-                        to: CGPoint(x: width, y: height * 0.22),
-                        control1: CGPoint(x: width * 0.28, y: -height * 0.15),
-                        control2: CGPoint(x: width * 0.69, y: height * 1.2)
+                        to: CGPoint(x: width, y: horizonY),
+                        control1: CGPoint(x: width * 0.28, y: peakY),
+                        control2: CGPoint(x: width * 0.72, y: peakY)
                     )
                 }
-                .stroke(SkyPalette.violet.opacity(0.7), style: StrokeStyle(lineWidth: 1.5, dash: [4, 6]))
+                .stroke(color.opacity(0.8), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+
                 Circle()
-                    .fill(SkyPalette.cyan)
+                    .fill(color)
                     .frame(width: 9, height: 9)
-                    .shadow(color: SkyPalette.cyan.opacity(0.8), radius: 9)
-                    .position(x: width * progress, y: height * 0.43)
-                Image(systemName: "globe.americas.fill")
-                    .font(.system(size: 38))
-                    .foregroundStyle(SkyPalette.primary.opacity(0.83))
-                    .position(x: width * 0.5, y: height * 0.5)
+                    .shadow(color: color.opacity(0.65), radius: 5)
+                    .position(x: x, y: y)
+
+                Text("PASS ELEVATION · NOT TO SCALE")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .tracking(0.6)
+                    .foregroundStyle(SkyPalette.muted)
+                    .position(x: width * 0.5, y: 7)
+                Text("MAX \(Int(maximumElevation.rounded()))°")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(color)
+                    .position(x: width * 0.5, y: max(20, peakY - 9))
                 Text("AOS")
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
                     .foregroundStyle(SkyPalette.muted)
-                    .position(x: 13, y: height * 0.88)
+                    .position(x: 13, y: height - 5)
                 Text("LOS")
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
                     .foregroundStyle(SkyPalette.muted)
-                    .position(x: width - 14, y: height * 0.12)
+                    .position(x: width - 14, y: height - 5)
             }
         }
+        .frame(height: 94)
+        .accessibilityLabel("Pass elevation profile, maximum elevation \(Int(maximumElevation)) degrees")
     }
 }
 

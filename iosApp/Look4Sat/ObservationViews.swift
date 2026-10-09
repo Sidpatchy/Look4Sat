@@ -24,6 +24,9 @@ struct RadarView: View {
     @State private var trajectory: [TrackedPosition] = []
     @State private var selectedPane: RadarPane = .radar
 
+    private var selectedPass: PassItem? { store.relevantPass(for: selectedSatelliteID) }
+    private var trajectoryTaskKey: String { "\(selectedSatelliteID):\(selectedPass?.id ?? "none")" }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -33,6 +36,7 @@ struct RadarView: View {
                     selectedSatelliteID: selectedSatelliteID,
                     onSelect: onSelectSatellite
                 )
+                RadarPassTimer(store: store, satelliteID: selectedSatelliteID)
                 Picker("Radar page", selection: $selectedPane) {
                     ForEach(RadarPane.allCases) { pane in Text(pane.rawValue).tag(pane) }
                 }
@@ -56,19 +60,25 @@ struct RadarView: View {
         .background(SkyPalette.ink.opacity(0.4))
         .toolbar(.hidden, for: .navigationBar)
         .refreshable { await store.recalculatePasses() }
-        .task(id: selectedSatelliteID) {
+        .task(id: trajectoryTaskKey) {
             await loadTrajectory()
         }
     }
 
     private func loadTrajectory() async {
-        let now = Int64(Date().timeIntervalSince1970 * 1000)
-        trajectory = await store.trajectory(
+        guard let pass = selectedPass else {
+            trajectory = []
+            return
+        }
+        let duration = pass.prediction.losTimeMillis - pass.prediction.aosTimeMillis
+        let sampledTrajectory = await store.trajectory(
             for: selectedSatelliteID,
-            startTimeMillis: now - 15 * 60_000,
-            endTimeMillis: now + 30 * 60_000,
-            stepMillis: 30_000
+            startTimeMillis: pass.prediction.aosTimeMillis,
+            endTimeMillis: pass.prediction.losTimeMillis,
+            stepMillis: max(5_000, duration / 120)
         )
+        guard !Task.isCancelled else { return }
+        trajectory = sampledTrajectory
     }
 
 }
@@ -99,6 +109,11 @@ private struct RadarDisplay: View {
                     position: position,
                     trajectory: trajectory,
                     rotationDegrees: rotation,
+                    positionColor: SkyPalette.elevationColor(
+                        position.elevationDegrees,
+                        low: store.passFilters.lowHighlightElevation,
+                        high: store.passFilters.highHighlightElevation
+                    ),
                     pointingAzimuthDegrees: correctedAimAzimuth + (flipRadar ? 180 : 0),
                     pointingElevationDegrees: correctedAimElevation,
                     showsPointingMarker: store.preferences.useCompass && orientation.isAvailable,
@@ -133,7 +148,7 @@ private struct RadarDisplay: View {
 
                 HStack(spacing: 10) {
                     radarMetric("AZIMUTH", value: String(format: "%.1f°", position.azimuthDegrees))
-                    radarMetric("ELEVATION", value: String(format: "%+.1f°", position.elevationDegrees))
+                    radarElevationMetric(position.elevationDegrees, filters: store.passFilters)
                     radarMetric("RANGE", value: String(format: "%.0f km", position.distanceKilometers))
                 }
 
@@ -165,6 +180,66 @@ private struct RadarDisplay: View {
             return
         }
         orientation.start()
+    }
+}
+
+private struct RadarPassTimer: View {
+    @ObservedObject var store: SatelliteStore
+    let satelliteID: Int32
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { timeline in
+            let now = Int64(timeline.date.timeIntervalSince1970 * 1000)
+            let satellitePasses = store.passes.filter { $0.satellite.catalogNumber == satelliteID }
+            let currentPass = satellitePasses.first {
+                $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
+            }
+            let nextPass = satellitePasses.first { $0.prediction.aosTimeMillis > now }
+            let active = currentPass != nil
+            let pass = currentPass ?? nextPass
+
+            HStack(spacing: 12) {
+                timerEndpoint("AOS", millis: pass?.prediction.aosTimeMillis, emphasized: !active)
+                Spacer(minLength: 4)
+                VStack(spacing: 2) {
+                    Text(active ? "TIME TO LOS" : "TIME TO AOS")
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .tracking(1)
+                        .foregroundStyle(SkyPalette.cyan)
+                    Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
+                        .font(.system(size: 20, weight: .bold, design: .monospaced))
+                        .monospacedDigit()
+                        .foregroundStyle(SkyPalette.primary)
+                }
+                Spacer(minLength: 4)
+                timerEndpoint("LOS", millis: pass?.prediction.losTimeMillis, emphasized: active)
+            }
+            .padding(.horizontal, 15)
+            .padding(.vertical, 11)
+            .orbitalGlass(cornerRadius: 18)
+        }
+    }
+
+    private func timerEndpoint(_ title: String, millis: Int64?, emphasized: Bool) -> some View {
+        VStack(alignment: title == "AOS" ? .leading : .trailing, spacing: 3) {
+            Text(title)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(1)
+                .foregroundStyle(emphasized ? SkyPalette.cyan : SkyPalette.muted)
+            Text(millis.map { store.formattedTime($0, dateStyle: .none) } ?? "—")
+                .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                .foregroundStyle(SkyPalette.primary)
+                .monospacedDigit()
+        }
+        .frame(minWidth: 52, alignment: title == "AOS" ? .leading : .trailing)
+    }
+
+    private func countdown(until target: Int64, now: Int64) -> String {
+        let totalSeconds = max(0, (target - now) / 1000)
+        let hours = totalSeconds / 3600
+        let minutes = (totalSeconds % 3600) / 60
+        let seconds = totalSeconds % 60
+        return String(format: "%02lld:%02lld:%02lld", hours, minutes, seconds)
     }
 }
 
@@ -205,12 +280,12 @@ private final class RadarOrientationManager: ObservableObject {
             return
         }
 
-        motionManager.deviceMotionUpdateInterval = 1.0 / 20.0
+        motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
         motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
             guard error == nil, let attitude = motion?.attitude else { return }
-            // Core Motion's positive yaw turns opposite the radar's clockwise azimuth
-            // convention: north/south match, but east/west are reversed without this sign.
-            var azimuth = -attitude.yaw * 180 / .pi
+            // Convert Core Motion's yaw into clockwise radar azimuth. Its north axis is
+            // one quarter-turn from the phone's long axis, so remove that fixed offset.
+            var azimuth = (-attitude.yaw * 180 / .pi - 90).truncatingRemainder(dividingBy: 360)
             if azimuth < 0 { azimuth += 360 }
             let elevation = attitude.pitch * 180 / .pi
             Task { @MainActor [weak self] in
@@ -222,14 +297,14 @@ private final class RadarOrientationManager: ObservableObject {
                     updated.elevationDegrees = elevation
                 } else {
                     let delta = (azimuth - updated.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
-                    if abs(delta) >= 0.1 {
-                        let movement = delta * 0.8
+                    if abs(delta) >= 0.2 {
+                        let movement = delta * 0.45
                         updated.rotationHeadingDegrees += movement
                         updated.azimuthDegrees = (updated.azimuthDegrees + movement + 360).truncatingRemainder(dividingBy: 360)
                     }
                     let elevationDelta = elevation - updated.elevationDegrees
-                    if abs(elevationDelta) >= 0.1 {
-                        updated.elevationDegrees += elevationDelta * 0.8
+                    if abs(elevationDelta) >= 0.15 {
+                        updated.elevationDegrees += elevationDelta * 0.45
                     }
                 }
                 updated.isAvailable = true
@@ -699,6 +774,15 @@ struct OrbitMapView: View {
     var body: some View {
         ZStack(alignment: .top) {
             Map(position: $cameraPosition) {
+                if let satellite = store.satellite(withID: selectedSatelliteID),
+                   let position = store.position(for: satellite) {
+                    let footprint = footprintBoundary(for: position)
+                    MapPolygon(coordinates: footprint)
+                        .foregroundStyle(SkyPalette.cyan.opacity(0.12))
+                    MapPolyline(coordinates: footprint, contourStyle: .geodesic)
+                        .stroke(SkyPalette.cyan.opacity(0.7), lineWidth: 1.5)
+                }
+
                 ForEach(groundTrackSegments(groundTrack).indices, id: \.self) { index in
                     let segment = groundTrackSegments(groundTrack)[index]
                     if segment.count > 1 {
@@ -750,16 +834,20 @@ struct OrbitMapView: View {
                     selectedSatelliteID: selectedSatelliteID,
                     onSelect: onSelectSatellite
                 )
+                RadarPassTimer(store: store, satelliteID: selectedSatelliteID)
                 if let satellite = store.satellite(withID: selectedSatelliteID),
                    let position = store.position(for: satellite) {
                     HStack(spacing: 8) {
-                        Circle()
-                            .fill(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.violet)
-                            .frame(width: 7, height: 7)
+                        Circle().fill(SkyPalette.cyan.opacity(0.65)).frame(width: 8, height: 8)
                         Text("\(satellite.name)  ·  \(String(format: "%+.0f° elevation", position.elevationDegrees))")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(SkyPalette.primary)
                             .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("FOOTPRINT")
+                            .font(.system(size: 8, weight: .bold, design: .rounded))
+                            .tracking(0.8)
+                            .foregroundStyle(SkyPalette.cyan)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -784,6 +872,31 @@ struct OrbitMapView: View {
             endTimeMillis: now + 45 * 60_000,
             stepMillis: 90_000
         )
+    }
+
+    private func footprintBoundary(for position: TrackedPosition) -> [CLLocationCoordinate2D] {
+        let earthRadius = 6_371.0
+        let orbitalRadius = earthRadius + max(0, position.altitudeKilometers)
+        let angularRadius = acos(min(1, earthRadius / orbitalRadius))
+        let centerLatitude = position.latitudeDegrees * .pi / 180
+        let centerLongitude = position.longitudeDegrees * .pi / 180
+        let sampleCount = 72
+
+        var coordinates = (0..<sampleCount).map { index -> CLLocationCoordinate2D in
+            let bearing = Double(index) * 2 * .pi / Double(sampleCount)
+            let latitude = asin(
+                sin(centerLatitude) * cos(angularRadius) +
+                    cos(centerLatitude) * sin(angularRadius) * cos(bearing)
+            )
+            let longitude = centerLongitude + atan2(
+                sin(bearing) * sin(angularRadius) * cos(centerLatitude),
+                cos(angularRadius) - sin(centerLatitude) * sin(latitude)
+            )
+            let longitudeDegrees = (longitude * 180 / .pi + 540).truncatingRemainder(dividingBy: 360) - 180
+            return CLLocationCoordinate2D(latitude: latitude * 180 / .pi, longitude: longitudeDegrees)
+        }
+        if let first = coordinates.first { coordinates.append(first) }
+        return coordinates
     }
 }
 
@@ -1513,6 +1626,7 @@ private struct PolarRadarPlot: View {
     let position: TrackedPosition
     let trajectory: [TrackedPosition]
     let rotationDegrees: Double
+    let positionColor: Color
     let pointingAzimuthDegrees: Double
     let pointingElevationDegrees: Double
     let showsPointingMarker: Bool
@@ -1559,7 +1673,7 @@ private struct PolarRadarPlot: View {
                             width: dotRadius * 2,
                             height: dotRadius * 2
                         ))
-                        context.fill(dot, with: .color(SkyPalette.cyan))
+                        context.fill(dot, with: .color(positionColor))
                         context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
                     }
 
@@ -1595,7 +1709,7 @@ private struct PolarRadarPlot: View {
             .foregroundStyle(SkyPalette.muted)
         }
         .rotationEffect(.degrees(rotationDegrees))
-        .animation(.linear(duration: 1.0 / 20.0), value: rotationDegrees)
+        .animation(.linear(duration: 1.0 / 60.0), value: rotationDegrees)
         .aspectRatio(1, contentMode: .fit)
         .padding(12)
     }
@@ -1740,6 +1854,31 @@ private func radarMetric(_ title: String, value: String) -> some View {
             .foregroundStyle(SkyPalette.primary)
             .lineLimit(1)
             .minimumScaleFactor(0.75)
+    }
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .padding(13)
+    .orbitalGlass(cornerRadius: 18)
+}
+
+private func radarElevationMetric(_ elevation: Double, filters: PassFilterSettings) -> some View {
+    let color = SkyPalette.elevationColor(
+        elevation,
+        low: filters.lowHighlightElevation,
+        high: filters.highHighlightElevation
+    )
+    return VStack(alignment: .leading, spacing: 5) {
+        Text("ELEVATION")
+            .font(.system(size: 9, weight: .bold, design: .rounded))
+            .tracking(1)
+            .foregroundStyle(SkyPalette.muted)
+        HStack(spacing: 4) {
+            ElevationAngleSymbol(color: color)
+            Text(String(format: "%+.1f°", elevation))
+                .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                .foregroundStyle(color)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+        }
     }
     .frame(maxWidth: .infinity, alignment: .leading)
     .padding(13)
