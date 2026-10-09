@@ -38,7 +38,7 @@ struct ContentView: View {
                     .tabItem { Label("Passes", systemImage: "sparkles") }
                     .tag(Look4SatTab.passes)
                 NavigationStack { SatellitesView(store: store, onSelectSatellite: openRadar) }
-                    .tabItem { Label("Satellites", systemImage: "satellite") }
+                    .tabItem { Label("Satellites", systemImage: "antenna.radiowaves.left.and.right") }
                     .tag(Look4SatTab.satellites)
                 NavigationStack {
                     RadarView(
@@ -308,7 +308,7 @@ private struct PassesView: View {
         return HStack(spacing: 14) {
             ZStack {
                 Circle().fill(SkyPalette.violet.opacity(0.2)).frame(width: 42, height: 42)
-                Image(systemName: "satellite")
+                 Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 17, weight: .medium))
                     .foregroundStyle(SkyPalette.violet)
             }
@@ -484,7 +484,7 @@ private struct SatellitesView: View {
                     ZStack {
                         Circle().fill(selected ? SkyPalette.cyan.opacity(0.16) : SkyPalette.primary.opacity(0.06))
                             .frame(width: 40, height: 40)
-                        Image(systemName: "satellite")
+                         Image(systemName: "antenna.radiowaves.left.and.right")
                             .font(.system(size: 16))
                             .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
                     }

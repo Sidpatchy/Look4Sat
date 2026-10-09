@@ -272,7 +272,6 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         didSet { UserDefaults.standard.set(selectedTransponderUUID, forKey: "selectedTransponderUUID") }
     }
     @Published private(set) var location: CLLocation?
-    @Published private(set) var compassHeadingDegrees = 0.0
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var isLoading = false
     @Published private(set) var statusMessage: String?
@@ -301,10 +300,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     }
     @Published var passSearchText = ""
     @Published var preferences = Look4SatPreferences.load() {
-        didSet {
-            preferences.save()
-            updateHeadingUpdates()
-        }
+        didSet { preferences.save() }
     }
     @Published var passFilters = PassFilterSettings.load() {
         didSet { passFilters.save() }
@@ -384,7 +380,6 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         switch locationManager.authorizationStatus {
         case .authorizedAlways, .authorizedWhenInUse:
             locationManager.requestLocation()
-            updateHeadingUpdates()
         case .notDetermined:
             locationManager.requestWhenInUseAuthorization()
         case .denied, .restricted:
@@ -856,13 +851,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
             manager.requestLocation()
-            updateHeadingUpdates()
         }
-    }
-
-    func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
-        let heading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
-        if heading >= 0 { compassHeadingDegrees = heading }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -907,17 +896,6 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     private var transceiverCacheURL: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("transceivers.json")
-    }
-
-    private func updateHeadingUpdates() {
-        guard preferences.useCompass,
-              CLLocationManager.headingAvailable(),
-              locationManager.authorizationStatus == .authorizedWhenInUse ||
-                locationManager.authorizationStatus == .authorizedAlways else {
-            locationManager.stopUpdatingHeading()
-            return
-        }
-        locationManager.startUpdatingHeading()
     }
 
     nonisolated private static func parseTransceivers(_ data: Data) -> [IOSTransponder] {

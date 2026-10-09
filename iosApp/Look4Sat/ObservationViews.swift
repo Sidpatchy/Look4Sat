@@ -1,6 +1,7 @@
 import CoreLocation
 import AVFAudio
 import Combine
+import CoreMotion
 import Foundation
 import Look4SatShared
 import MapKit
@@ -22,6 +23,7 @@ struct RadarView: View {
 
     @State private var trajectory: [TrackedPosition] = []
     @State private var selectedPane: RadarPane = .radar
+    @StateObject private var orientation = RadarOrientationManager()
 
     private var satellite: SatelliteTarget? { store.satellite(withID: selectedSatelliteID) }
     private var position: TrackedPosition? {
@@ -64,6 +66,10 @@ struct RadarView: View {
         .task(id: selectedSatelliteID) {
             await loadTrajectory()
         }
+        .onAppear { updateOrientationUpdates() }
+        .onChange(of: selectedPane) { _, _ in updateOrientationUpdates() }
+        .onChange(of: store.preferences.useCompass) { _, _ in updateOrientationUpdates() }
+        .onDisappear { orientation.stop() }
     }
 
     private func loadTrajectory() async {
@@ -79,23 +85,49 @@ struct RadarView: View {
     @ViewBuilder
     private var radarContents: some View {
         if let position {
-            TimelineView(.animation(minimumInterval: 0.08, paused: !store.preferences.showSweep)) { timeline in
-                let rotation = store.preferences.useCompass
-                    ? -store.compassHeadingDegrees + store.preferences.compassAzimuthOffset
-                    : 0
-                let sweep = timeline.date.timeIntervalSinceReferenceDate * 45
-                PolarRadarPlot(
-                    position: position,
-                    trajectory: trajectory,
-                    rotationDegrees: rotation,
-                    elevationOffsetDegrees: store.preferences.compassElevationOffset,
-                    sweepDegrees: sweep,
-                    showSweep: store.preferences.showSweep
-                )
-                .frame(maxWidth: 520)
-                .frame(maxWidth: .infinity)
-                .orbitalGlass(cornerRadius: 30)
+            let correctedAimElevation = orientation.elevationDegrees + store.preferences.compassElevationOffset
+            let flipRadar = correctedAimElevation < 0
+            let correctedAimAzimuth = orientation.azimuthDegrees + store.preferences.compassAzimuthOffset
+            let displayedAimAzimuth = (correctedAimAzimuth.truncatingRemainder(dividingBy: 360) + 360)
+                .truncatingRemainder(dividingBy: 360)
+            let rotation = store.preferences.useCompass
+                ? -correctedAimAzimuth + (flipRadar ? 180 : 0)
+                : 0
+            PolarRadarPlot(
+                position: position,
+                trajectory: trajectory,
+                rotationDegrees: rotation,
+                pointingAzimuthDegrees: correctedAimAzimuth + (flipRadar ? 180 : 0),
+                pointingElevationDegrees: correctedAimElevation,
+                showsPointingMarker: store.preferences.useCompass && orientation.isAvailable,
+                showsSweep: store.preferences.showSweep
+            )
+            .frame(maxWidth: 520)
+            .frame(maxWidth: .infinity)
+            .orbitalGlass(cornerRadius: 30)
+
+            HStack(spacing: 8) {
+                Image(systemName: "scope")
+                    .foregroundStyle(orientation.isAvailable ? SkyPalette.cyan : SkyPalette.muted)
+                if store.preferences.useCompass && orientation.isAvailable {
+                    Text("PHONE AIM  ·  AZ \(String(format: "%.0f°", displayedAimAzimuth))  EL \(String(format: "%+.0f°", correctedAimElevation))")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(SkyPalette.primary)
+                    Spacer(minLength: 4)
+                    Text(orientation.northReference)
+                        .font(.system(size: 9, weight: .bold, design: .rounded))
+                        .foregroundStyle(SkyPalette.muted)
+                } else if store.preferences.useCompass {
+                    Text("Phone orientation sensor unavailable")
+                        .font(.caption)
+                        .foregroundStyle(SkyPalette.muted)
+                } else {
+                    Text("Pointing indicator disabled in Settings")
+                        .font(.caption)
+                        .foregroundStyle(SkyPalette.muted)
+                }
             }
+            .padding(.horizontal, 4)
 
             HStack(spacing: 10) {
                 radarMetric("AZIMUTH", value: String(format: "%.1f°", position.azimuthDegrees))
@@ -110,13 +142,89 @@ struct RadarView: View {
             .font(.subheadline.weight(.medium))
             .foregroundStyle(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.muted)
             .padding(.horizontal, 4)
-            Text("Polar view is north-up; distance from the center represents elevation.")
+            Text(store.preferences.useCompass && orientation.isAvailable
+                ? "Phone-relative radar; the red reticle marks where the top of your phone points."
+                : "North-up polar view; distance from the center represents elevation.")
                 .font(.caption)
                 .foregroundStyle(SkyPalette.muted)
                 .padding(.horizontal, 4)
         } else {
             observationEmptyState(store: store)
         }
+    }
+
+    private func updateOrientationUpdates() {
+        guard selectedPane == .radar, store.preferences.useCompass else {
+            orientation.stop()
+            return
+        }
+        orientation.start()
+    }
+}
+
+@MainActor
+private final class RadarOrientationManager: ObservableObject {
+    @Published private(set) var azimuthDegrees = 0.0
+    @Published private(set) var elevationDegrees = 0.0
+    @Published private(set) var isAvailable = false
+    @Published private(set) var northReference = "REL"
+
+    private let motionManager = CMMotionManager()
+
+    func start() {
+        guard !motionManager.isDeviceMotionActive, motionManager.isDeviceMotionAvailable else { return }
+        let availableFrames = CMMotionManager.availableAttitudeReferenceFrames()
+        let referenceFrame: CMAttitudeReferenceFrame
+        if availableFrames.contains(.xTrueNorthZVertical) {
+            referenceFrame = .xTrueNorthZVertical
+            northReference = "TRUE N"
+        } else if availableFrames.contains(.xMagneticNorthZVertical) {
+            referenceFrame = .xMagneticNorthZVertical
+            northReference = "MAG N"
+        } else if availableFrames.contains(.xArbitraryCorrectedZVertical) {
+            referenceFrame = .xArbitraryCorrectedZVertical
+            northReference = "REL"
+        } else {
+            return
+        }
+
+        motionManager.deviceMotionUpdateInterval = 1.0 / 15.0
+        motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
+            guard error == nil, let attitude = motion?.attitude, let self else { return }
+            let matrix = attitude.rotationMatrix
+            // The phone's long edge is its local Y axis. Project it onto north/east/up
+            // to track the direction the top of the phone is pointing, not just yaw.
+            let north = Double(matrix.m12)
+            let east = -Double(matrix.m22)
+            let up = min(1, max(-1, Double(matrix.m32)))
+            var azimuth = atan2(east, north) * 180 / .pi
+            if azimuth < 0 { azimuth += 360 }
+            let elevation = asin(up) * 180 / .pi
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                if !self.isAvailable {
+                    self.azimuthDegrees = azimuth
+                    self.elevationDegrees = elevation
+                } else {
+                    let delta = (azimuth - self.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
+                    if abs(delta) >= 0.2 {
+                        self.azimuthDegrees = (self.azimuthDegrees + delta * 0.35 + 360).truncatingRemainder(dividingBy: 360)
+                    }
+                    let elevationDelta = elevation - self.elevationDegrees
+                    if abs(elevationDelta) >= 0.2 {
+                        self.elevationDegrees += elevationDelta * 0.35
+                    }
+                }
+                self.isAvailable = true
+            }
+        }
+    }
+
+    func stop() {
+        if motionManager.isDeviceMotionActive {
+            motionManager.stopDeviceMotionUpdates()
+        }
+        isAvailable = false
     }
 }
 
@@ -595,7 +703,7 @@ struct OrbitMapView: View {
                     if let position = store.position(for: satellite) {
                         Annotation(satellite.name, coordinate: coordinate(for: position)) {
                             Button { onSelectSatellite(satellite) } label: {
-                                Image(systemName: satellite.catalogNumber == selectedSatelliteID ? "dot.radiowaves.left.and.right" : "satellite")
+                                Image(systemName: satellite.catalogNumber == selectedSatelliteID ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right")
                                     .font(.system(size: 15, weight: .bold))
                                     .foregroundStyle(SkyPalette.primary)
                                     .padding(10)
@@ -1357,7 +1465,7 @@ private struct SatellitePicker: View {
             }
         } label: {
             HStack(spacing: 10) {
-                Image(systemName: "satellite")
+                Image(systemName: "antenna.radiowaves.left.and.right")
                     .foregroundStyle(SkyPalette.cyan)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(selectedSatellite?.name ?? "No satellite selected")
@@ -1387,9 +1495,10 @@ private struct PolarRadarPlot: View {
     let position: TrackedPosition
     let trajectory: [TrackedPosition]
     let rotationDegrees: Double
-    let elevationOffsetDegrees: Double
-    let sweepDegrees: Double
-    let showSweep: Bool
+    let pointingAzimuthDegrees: Double
+    let pointingElevationDegrees: Double
+    let showsPointingMarker: Bool
+    let showsSweep: Bool
 
     var body: some View {
         GeometryReader { geometry in
@@ -1397,6 +1506,10 @@ private struct PolarRadarPlot: View {
             let radius = diameter * 0.405
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
             ZStack {
+                if showsSweep {
+                    RadarSweepOverlay()
+                }
+
                 Canvas { context, _ in
                     for elevation in [0.0, 30.0, 60.0] {
                         let ringRadius = radius * CGFloat(1 - elevation / 90)
@@ -1414,17 +1527,6 @@ private struct PolarRadarPlot: View {
                     axes.move(to: CGPoint(x: center.x, y: center.y - radius))
                     axes.addLine(to: CGPoint(x: center.x, y: center.y + radius))
                     context.stroke(axes, with: .color(SkyPalette.primary.opacity(0.2)), lineWidth: 1)
-
-                    if showSweep {
-                        let angle = (sweepDegrees.truncatingRemainder(dividingBy: 360) - 90) * .pi / 180
-                        var sweep = Path()
-                        sweep.move(to: center)
-                        sweep.addLine(to: CGPoint(
-                            x: center.x + cos(angle) * radius,
-                            y: center.y + sin(angle) * radius
-                        ))
-                        context.stroke(sweep, with: .color(SkyPalette.cyan.opacity(0.75)), lineWidth: 1.5)
-                    }
 
                     if trajectory.count > 1 {
                         var path = Path()
@@ -1445,6 +1547,29 @@ private struct PolarRadarPlot: View {
                     ))
                     context.fill(dot, with: .color(position.isAboveHorizon ? SkyPalette.cyan : .orange))
                     context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
+
+                    if showsPointingMarker {
+                        let aim = radarPoint(
+                            azimuth: pointingAzimuthDegrees,
+                            elevation: abs(pointingElevationDegrees),
+                            center: center,
+                            radius: radius
+                        )
+                        let reticleRadius: CGFloat = 9
+                        let reticle = Path(ellipseIn: CGRect(
+                            x: aim.x - reticleRadius,
+                            y: aim.y - reticleRadius,
+                            width: reticleRadius * 2,
+                            height: reticleRadius * 2
+                        ))
+                        context.stroke(reticle, with: .color(.red), lineWidth: 2)
+                        var crosshair = Path()
+                        crosshair.move(to: CGPoint(x: aim.x - 14, y: aim.y))
+                        crosshair.addLine(to: CGPoint(x: aim.x + 14, y: aim.y))
+                        crosshair.move(to: CGPoint(x: aim.x, y: aim.y - 14))
+                        crosshair.addLine(to: CGPoint(x: aim.x, y: aim.y + 14))
+                        context.stroke(crosshair, with: .color(.red.opacity(0.9)), lineWidth: 1.5)
+                    }
                 }
                 Text("N").position(x: center.x, y: center.y - radius - 13)
                 Text("E").position(x: center.x + radius + 13, y: center.y)
@@ -1460,13 +1585,71 @@ private struct PolarRadarPlot: View {
     }
 
     private func radarPoint(_ point: TrackedPosition, center: CGPoint, radius: CGFloat) -> CGPoint {
-        let elevation = min(90, max(0, point.elevationDegrees + elevationOffsetDegrees))
+        radarPoint(
+            azimuth: point.azimuthDegrees,
+            elevation: point.elevationDegrees,
+            center: center,
+            radius: radius
+        )
+    }
+
+    private func radarPoint(azimuth: Double, elevation: Double, center: CGPoint, radius: CGFloat) -> CGPoint {
+        let elevation = min(90, max(0, elevation))
         let radialDistance = radius * CGFloat(1 - elevation / 90)
-        let angle = (point.azimuthDegrees - 90) * .pi / 180
+        let angle = (azimuth - 90) * .pi / 180
         return CGPoint(
             x: center.x + cos(angle) * radialDistance,
             y: center.y + sin(angle) * radialDistance
         )
+    }
+}
+
+private struct RadarSweepOverlay: View {
+    var body: some View {
+        GeometryReader { geometry in
+            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
+                Canvas { context, size in
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    let radius = min(size.width, size.height) * 0.405
+                    let head = (timeline.date.timeIntervalSinceReferenceDate * 45).truncatingRemainder(dividingBy: 360) - 90
+                    let trailDegrees = 78.0
+                    let sliceCount = 24
+
+                    for slice in 0..<sliceCount {
+                        let start = head - trailDegrees * Double(slice) / Double(sliceCount)
+                        let end = head - trailDegrees * Double(slice + 1) / Double(sliceCount)
+                        let startRadians = start * .pi / 180
+                        let endRadians = end * .pi / 180
+                        var wedge = Path()
+                        wedge.move(to: center)
+                        wedge.addLine(to: CGPoint(
+                            x: center.x + cos(startRadians) * radius,
+                            y: center.y + sin(startRadians) * radius
+                        ))
+                        wedge.addLine(to: CGPoint(
+                            x: center.x + cos(endRadians) * radius,
+                            y: center.y + sin(endRadians) * radius
+                        ))
+                        wedge.closeSubpath()
+                        let fade = 0.32 * pow(1 - Double(slice) / Double(sliceCount), 1.8)
+                        context.fill(wedge, with: .color(SkyPalette.cyan.opacity(fade)))
+                    }
+
+                    let headRadians = head * .pi / 180
+                    var beam = Path()
+                    beam.move(to: center)
+                    beam.addLine(to: CGPoint(
+                        x: center.x + cos(headRadians) * radius,
+                        y: center.y + sin(headRadians) * radius
+                    ))
+                    context.stroke(beam, with: .color(SkyPalette.cyan.opacity(0.28)), lineWidth: 4)
+                    context.stroke(beam, with: .color(SkyPalette.cyan), lineWidth: 1.4)
+                }
+                .frame(width: geometry.size.width, height: geometry.size.height)
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 }
 

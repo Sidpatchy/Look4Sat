@@ -181,6 +181,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Look4Sat;
+				INFOPLIST_KEY_NSMotionUsageDescription = "Device motion is used on device to show the direction your phone is pointing on the radar.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone audio is processed on device for satellite SSTV reception.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used on this device to calculate satellite passes overhead.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -217,6 +218,7 @@
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_CFBundleDisplayName = Look4Sat;
+				INFOPLIST_KEY_NSMotionUsageDescription = "Device motion is used on device to show the direction your phone is pointing on the radar.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone audio is processed on device for satellite SSTV reception.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used on this device to calculate satellite passes overhead.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
