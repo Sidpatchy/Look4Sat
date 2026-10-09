@@ -17,16 +17,12 @@
  */
 package com.rtbishop.look4sat.core.domain.utility
 
-import java.util.Locale
-import java.util.concurrent.TimeUnit
-
 fun Long.toTimerString(): String {
     val millis = coerceAtLeast(0L)
-    val format = "%02d:%02d:%02d"
-    val hours = TimeUnit.MILLISECONDS.toHours(millis)
-    val minutes = TimeUnit.MILLISECONDS.toMinutes(millis) % 60
-    val seconds = TimeUnit.MILLISECONDS.toSeconds(millis) % 60
-    return String.format(Locale.ENGLISH, format, hours, minutes, seconds)
+    val hours = millis / 3_600_000
+    val minutes = (millis / 60_000) % 60
+    val seconds = (millis / 1_000) % 60
+    return "${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}"
 }
 
 fun Float.round(decimals: Int): Float {

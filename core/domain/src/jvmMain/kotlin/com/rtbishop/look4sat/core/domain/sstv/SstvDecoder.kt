@@ -655,8 +655,7 @@ internal class DecoderEngine(
         sample -= amount; leaderBreak -= amount; lastSync -= amount
         adjust(sync5ms, amount); adjust(sync9ms, amount); adjust(sync20ms, amount)
         // Discard already-decoded samples by sliding the live region back to index 0.
-        // System.arraycopy handles the overlapping regions correctly and is a native
-        // memcpy on JVM, so this is fast despite moving the full remaining window.
+        // copyInto handles overlapping regions while sliding the remaining sample window.
         scanLineBuffer.copyInto(scanLineBuffer, 0, amount, amount + sample)
     }
 

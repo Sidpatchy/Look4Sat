@@ -19,17 +19,37 @@ package com.rtbishop.look4sat.convention
 
 import org.gradle.api.Plugin
 import org.gradle.api.Project
-import org.gradle.kotlin.dsl.dependencies
+import org.gradle.kotlin.dsl.configure
+import org.jetbrains.kotlin.gradle.dsl.KotlinMultiplatformExtension
 
 @Suppress("Unused")
 internal class CoreDomainPlugin : Plugin<Project> {
     override fun apply(target: Project) = with(target) {
-        applyPlugin(libs.plugins.kotlin.jvm)
+        applyPlugin(libs.plugins.kotlin.multiplatform)
         applyPlugin(libs.plugins.kotlin.serialization)
-        setupKotlin()
-        dependencies {
-            implementation(libs.kotlin.coroutines)
-            implementation(libs.kotlin.serialization)
+        extensions.configure<KotlinMultiplatformExtension> {
+            jvmToolchain(libs.versions.jdkVersion.get().toInt())
+            jvm()
+            iosArm64().binaries.framework {
+                baseName = "Look4SatShared"
+                isStatic = true
+            }
+            iosSimulatorArm64().binaries.framework {
+                baseName = "Look4SatShared"
+                isStatic = true
+            }
+            val commonMain = sourceSets.getByName("commonMain")
+            commonMain.kotlin.srcDir("src/main/java")
+            val jvmMain = sourceSets.getByName("jvmMain")
+            jvmMain.dependencies {
+                implementation(libs.kotlin.coroutines)
+                implementation(libs.kotlin.serialization)
+            }
+            val jvmTest = sourceSets.getByName("jvmTest")
+            jvmTest.kotlin.srcDir("src/test/java")
+            jvmTest.dependencies {
+                implementation(libs.bundles.unitTest)
+            }
         }
     }
 }
