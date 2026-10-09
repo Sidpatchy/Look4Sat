@@ -15,6 +15,7 @@ struct Look4SatApp: App {
                         : .white
                 )
                 .task {
+                    await store.updateSkyMapPositions()
                     await store.start()
                     var elapsedSeconds = 0
                     while !Task.isCancelled {
@@ -23,6 +24,7 @@ struct Look4SatApp: App {
                         elapsedSeconds += 1
                         if elapsedSeconds.isMultiple(of: 60) {
                             await store.recalculatePasses()
+                            await store.updateSkyMapPositions()
                         } else {
                             await store.updateFocusedPosition()
                         }

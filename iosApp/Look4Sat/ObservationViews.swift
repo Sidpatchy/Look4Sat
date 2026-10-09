@@ -2,6 +2,8 @@ import CoreLocation
 import AVFAudio
 import Combine
 import CoreMotion
+import EventKit
+import EventKitUI
 import Foundation
 import Look4SatShared
 import MapKit
@@ -39,7 +41,7 @@ struct RadarView: View {
                     selectedSatelliteID: selectedSatelliteID,
                     onSelect: onSelectSatellite
                 )
-                RadarPassTimer(store: store, satelliteID: selectedSatelliteID)
+                RadarPassTimer(store: store, satelliteID: selectedSatelliteID, allowsCalendar: true)
                 Picker("Radar page", selection: $selectedPane) {
                     ForEach(RadarPane.allCases) { pane in Text(pane.rawValue).tag(pane) }
                 }
@@ -211,60 +213,136 @@ private struct RadarDisplay: View {
     }
 }
 
+private struct CalendarPass: Identifiable {
+    let name: String
+    let startTimeMillis: Int64
+    let endTimeMillis: Int64
+
+    var id: String { "\(name):\(startTimeMillis)" }
+}
+
+private struct CalendarEventEditor: UIViewControllerRepresentable {
+    @Environment(\.dismiss) private var dismiss
+    let pass: CalendarPass
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onDismiss: { dismiss() })
+    }
+
+    func makeUIViewController(context: Context) -> EKEventEditViewController {
+        let eventStore = EKEventStore()
+        let controller = EKEventEditViewController()
+        let event = EKEvent(eventStore: eventStore)
+        event.title = pass.name
+        event.notes = "Look4Sat satellite pass"
+        event.startDate = Date(timeIntervalSince1970: TimeInterval(pass.startTimeMillis) / 1000)
+        event.endDate = Date(timeIntervalSince1970: TimeInterval(pass.endTimeMillis) / 1000)
+        event.calendar = eventStore.defaultCalendarForNewEvents
+        controller.eventStore = eventStore
+        controller.event = event
+        controller.editViewDelegate = context.coordinator
+        return controller
+    }
+
+    func updateUIViewController(_ controller: EKEventEditViewController, context: Context) {}
+
+    final class Coordinator: NSObject, EKEventEditViewDelegate {
+        private let onDismiss: () -> Void
+
+        init(onDismiss: @escaping () -> Void) {
+            self.onDismiss = onDismiss
+        }
+
+        func eventEditViewController(
+            _ controller: EKEventEditViewController,
+            didCompleteWith action: EKEventEditViewAction
+        ) {
+            onDismiss()
+        }
+    }
+}
+
 private struct RadarPassTimer: View {
     @ObservedObject var store: SatelliteStore
     let satelliteID: Int32
+    let allowsCalendar: Bool
+    @State private var calendarPass: CalendarPass?
 
     var body: some View {
-        if store.satellite(withID: satelliteID)?.isDeepSpace == true {
-            HStack(spacing: 12) {
-                Image(systemName: "globe.americas.fill")
-                    .foregroundStyle(SkyPalette.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("DEEP SPACE OBJECT")
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .tracking(1)
-                        .foregroundStyle(SkyPalette.accent)
-                    Text("No AOS/LOS pass cycle")
-                        .font(.system(size: 12, weight: .medium, design: .rounded))
-                        .foregroundStyle(SkyPalette.primary)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 15)
-            .padding(.vertical, 11)
-            .orbitalGlass(cornerRadius: 18)
-        } else {
-            TimelineView(.periodic(from: .now, by: 1)) { timeline in
-                let now = Int64(timeline.date.timeIntervalSince1970 * 1000)
-                let satellitePasses = store.passes.filter { $0.satellite.catalogNumber == satelliteID }
-                let currentPass = satellitePasses.first {
-                    $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
-                }
-                let nextPass = satellitePasses.first { $0.prediction.aosTimeMillis > now }
-                let active = currentPass != nil
-                let pass = currentPass ?? nextPass
-
+        Group {
+            if store.satellite(withID: satelliteID)?.isDeepSpace == true {
                 HStack(spacing: 12) {
-                    timerEndpoint("AOS", millis: pass?.prediction.aosTimeMillis, emphasized: !active)
-                    Spacer(minLength: 4)
-                    VStack(spacing: 2) {
-                        Text(active ? "TIME TO LOS" : "TIME TO AOS")
+                    Image(systemName: "globe.americas.fill")
+                        .foregroundStyle(SkyPalette.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("DEEP SPACE OBJECT")
                             .font(.system(size: 9, weight: .bold, design: .rounded))
                             .tracking(1)
                             .foregroundStyle(SkyPalette.accent)
-                        Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
-                            .font(.system(size: 20, weight: .bold, design: .monospaced))
-                            .monospacedDigit()
+                        Text("No AOS/LOS pass cycle")
+                            .font(.system(size: 12, weight: .medium, design: .rounded))
                             .foregroundStyle(SkyPalette.primary)
                     }
-                    Spacer(minLength: 4)
-                    timerEndpoint("LOS", millis: pass?.prediction.losTimeMillis, emphasized: active)
+                    Spacer()
                 }
                 .padding(.horizontal, 15)
                 .padding(.vertical, 11)
                 .orbitalGlass(cornerRadius: 18)
+            } else {
+                TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                    let now = Int64(timeline.date.timeIntervalSince1970 * 1000)
+                    let satellitePasses = store.passes.filter { $0.satellite.catalogNumber == satelliteID }
+                    let currentPass = satellitePasses.first {
+                        $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
+                    }
+                    let nextPass = satellitePasses.first { $0.prediction.aosTimeMillis > now }
+                    let active = currentPass != nil
+                    let pass = currentPass ?? nextPass
+
+                    HStack(spacing: 10) {
+                        timerEndpoint("AOS", millis: pass?.prediction.aosTimeMillis, emphasized: !active)
+                        Spacer(minLength: 2)
+                        VStack(spacing: 2) {
+                            Text(active ? "TIME TO LOS" : "TIME TO AOS")
+                                .font(.system(size: 9, weight: .bold, design: .rounded))
+                                .tracking(1)
+                                .foregroundStyle(SkyPalette.accent)
+                            Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
+                                .font(.system(size: 20, weight: .bold, design: .monospaced))
+                                .monospacedDigit()
+                                .foregroundStyle(SkyPalette.primary)
+                        }
+                        Spacer(minLength: 2)
+                        timerEndpoint("LOS", millis: pass?.prediction.losTimeMillis, emphasized: active)
+                        if allowsCalendar {
+                            Button {
+                                if let pass {
+                                    calendarPass = CalendarPass(
+                                        name: pass.satellite.name,
+                                        startTimeMillis: pass.prediction.aosTimeMillis,
+                                        endTimeMillis: pass.prediction.losTimeMillis
+                                    )
+                                }
+                            } label: {
+                                Image(systemName: "calendar.badge.plus")
+                                    .font(.system(size: 17, weight: .semibold))
+                                    .foregroundStyle(pass == nil ? SkyPalette.muted : SkyPalette.accent)
+                                    .frame(width: 30, height: 40)
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(pass == nil)
+                            .accessibilityLabel("Add pass to calendar")
+                        }
+                    }
+                    .padding(.horizontal, 15)
+                    .padding(.vertical, 11)
+                    .orbitalGlass(cornerRadius: 18)
+                }
             }
+        }
+        .sheet(item: $calendarPass) { pass in
+            CalendarEventEditor(pass: pass)
+                .ignoresSafeArea()
         }
     }
 
@@ -1085,6 +1163,43 @@ struct OrbitMapView: View {
     var body: some View {
         ZStack(alignment: .top) {
             Map(position: $cameraPosition) {
+                if let sky = store.skyMapPositions {
+                    let nightPolygons = nightSidePolygons(
+                        sunLatitudeDegrees: sky.sunLatitudeDegrees,
+                        sunLongitudeDegrees: sky.sunLongitudeDegrees
+                    )
+                    ForEach(nightPolygons.indices, id: \.self) { index in
+                        MapPolygon(coordinates: nightPolygons[index])
+                            .foregroundStyle(.black.opacity(0.22))
+                    }
+                    Annotation(
+                        "Sun",
+                        coordinate: CLLocationCoordinate2D(
+                            latitude: sky.sunLatitudeDegrees,
+                            longitude: sky.sunLongitudeDegrees
+                        )
+                    ) {
+                        Image(systemName: "sun.max.fill")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundStyle(.yellow)
+                            .padding(7)
+                            .background(.black.opacity(0.75), in: Circle())
+                    }
+                    Annotation(
+                        "Moon",
+                        coordinate: CLLocationCoordinate2D(
+                            latitude: sky.moonLatitudeDegrees,
+                            longitude: sky.moonLongitudeDegrees
+                        )
+                    ) {
+                        Image(systemName: "moon.fill")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundStyle(.white)
+                            .padding(7)
+                            .background(.black.opacity(0.75), in: Circle())
+                    }
+                }
+
                 if let satellite = store.satellite(withID: selectedSatelliteID),
                    let position = currentPosition(for: satellite) {
                     let footprint = footprintBoundary(for: position)
@@ -1145,7 +1260,7 @@ struct OrbitMapView: View {
                     selectedSatelliteID: selectedSatelliteID,
                     onSelect: onSelectSatellite
                 )
-                RadarPassTimer(store: store, satelliteID: selectedSatelliteID)
+                RadarPassTimer(store: store, satelliteID: selectedSatelliteID, allowsCalendar: false)
                 if let satellite = store.satellite(withID: selectedSatelliteID),
                    let position = currentPosition(for: satellite) {
                     HStack(spacing: 8) {
@@ -1215,6 +1330,103 @@ struct OrbitMapView: View {
         }
         if let first = coordinates.first { coordinates.append(first) }
         return coordinates
+    }
+
+    private struct MapPoint {
+        let longitude: Double
+        let latitude: Double
+    }
+
+    /// Build narrow, antimeridian-clipped bands for the hemisphere facing away from the Sun.
+    private func nightSidePolygons(
+        sunLatitudeDegrees: Double,
+        sunLongitudeDegrees: Double
+    ) -> [[CLLocationCoordinate2D]] {
+        let sunLatitude = sunLatitudeDegrees * .pi / 180
+        let sunCenterLongitude = Self.normalizedLongitude(sunLongitudeDegrees + 180)
+        let minimumLatitude = -85.0
+        let maximumLatitude = 85.0
+        let step = 1.0
+        var polygons: [[CLLocationCoordinate2D]] = []
+
+        func halfWidth(at latitudeDegrees: Double) -> Double {
+            let latitude = latitudeDegrees * .pi / 180
+            let denominator = cos(latitude) * cos(sunLatitude)
+            let ratio: Double
+            if abs(denominator) < 1e-12 {
+                ratio = sin(latitude) * sin(sunLatitude) < 0 ? -1 : 1
+            } else {
+                ratio = sin(latitude) * sin(sunLatitude) / denominator
+            }
+            return acos(min(1, max(-1, ratio))) * 180 / .pi
+        }
+
+        var latitude = minimumLatitude
+        while latitude < maximumLatitude {
+            let nextLatitude = min(maximumLatitude, latitude + step)
+            let bottomHalfWidth = halfWidth(at: latitude)
+            let topHalfWidth = halfWidth(at: nextLatitude)
+            if bottomHalfWidth + topHalfWidth > 0.01 {
+                let band = [
+                    MapPoint(longitude: sunCenterLongitude - bottomHalfWidth, latitude: latitude),
+                    MapPoint(longitude: sunCenterLongitude - topHalfWidth, latitude: nextLatitude),
+                    MapPoint(longitude: sunCenterLongitude + topHalfWidth, latitude: nextLatitude),
+                    MapPoint(longitude: sunCenterLongitude + bottomHalfWidth, latitude: latitude)
+                ]
+                for worldOffset in -1...1 {
+                    let shifted = band.map {
+                        MapPoint(longitude: $0.longitude + Double(worldOffset) * 360, latitude: $0.latitude)
+                    }
+                    let clipped = Self.clipToWorldLongitude(shifted)
+                    guard clipped.count >= 3, Self.polygonArea(clipped) > 1e-8 else { continue }
+                    polygons.append(clipped.map {
+                        CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)
+                    })
+                }
+            }
+            latitude = nextLatitude
+        }
+        return polygons
+    }
+
+    private static func clipToWorldLongitude(_ polygon: [MapPoint]) -> [MapPoint] {
+        func clip(_ points: [MapPoint], boundary: Double, keepGreater: Bool) -> [MapPoint] {
+            guard !points.isEmpty else { return [] }
+            var result: [MapPoint] = []
+            var previous = points[points.count - 1]
+            var previousInside = keepGreater ? previous.longitude >= boundary : previous.longitude <= boundary
+
+            for current in points {
+                let currentInside = keepGreater ? current.longitude >= boundary : current.longitude <= boundary
+                if currentInside != previousInside {
+                    let span = current.longitude - previous.longitude
+                    let fraction = abs(span) < 1e-12 ? 0 : (boundary - previous.longitude) / span
+                    result.append(MapPoint(
+                        longitude: boundary,
+                        latitude: previous.latitude + fraction * (current.latitude - previous.latitude)
+                    ))
+                }
+                if currentInside { result.append(current) }
+                previous = current
+                previousInside = currentInside
+            }
+            return result
+        }
+
+        return clip(clip(polygon, boundary: -180, keepGreater: true), boundary: 180, keepGreater: false)
+    }
+
+    private static func polygonArea(_ polygon: [MapPoint]) -> Double {
+        guard polygon.count > 2 else { return 0 }
+        return abs(polygon.indices.reduce(0.0) { area, index in
+            let current = polygon[index]
+            let next = polygon[(index + 1) % polygon.count]
+            return area + current.longitude * next.latitude - next.longitude * current.latitude
+        }) / 2
+    }
+
+    private static func normalizedLongitude(_ longitude: Double) -> Double {
+        (longitude + 540).truncatingRemainder(dividingBy: 360) - 180
     }
 }
 

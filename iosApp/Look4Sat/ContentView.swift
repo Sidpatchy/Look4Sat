@@ -62,6 +62,7 @@ struct ElevationAngleSymbol: View {
 
 struct ContentView: View {
     @ObservedObject var store: SatelliteStore
+    @Environment(\.scenePhase) private var scenePhase
     @State private var selectedTab: Look4SatTab = .passes
     @State private var selectedSatelliteID: Int32 = 25544
 
@@ -101,6 +102,14 @@ struct ContentView: View {
             }
             .tint(SkyPalette.accent)
         }
+        .onAppear(perform: updateIdleTimer)
+        .onChange(of: selectedTab) { _, _ in updateIdleTimer() }
+        .onChange(of: scenePhase) { _, _ in updateIdleTimer() }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+    }
+
+    private func updateIdleTimer() {
+        UIApplication.shared.isIdleTimerDisabled = selectedTab == .radar && scenePhase == .active
     }
 
     private func selectSatellite(_ satellite: SatelliteTarget) {
@@ -182,7 +191,7 @@ private struct PassesView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             sectionTitle(
                                 "DEEP SPACE OBJECTS",
-                                detail: "Orbital period ≥225 min · \(store.visibleDeepSpaceObjects.count) entries"
+                                detail: deepSpaceDetail
                             )
                             ForEach(store.visibleDeepSpaceObjects) { item in
                                 Button { onSelectSatellite(item.satellite) } label: { deepSpaceRow(item) }
@@ -193,7 +202,7 @@ private struct PassesView: View {
                     if !store.remainingPassGroups.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(store.remainingPassGroups) { group in
-                                sectionTitle(group.dateLabel, detail: "\(group.items.count) upcoming passes")
+                                sectionTitle(group.dateLabel, detail: passGroupDetail(group))
                                     .padding(.top, 8)
                                 ForEach(group.items) { item in
                                     Button { onSelectSatellite(item.satellite) } label: { passRow(item) }
@@ -332,6 +341,7 @@ private struct PassesView: View {
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let isInProgress = item.prediction.aosTimeMillis <= now && item.prediction.losTimeMillis > now
         let passDuration = max(1, item.prediction.losTimeMillis - item.prediction.aosTimeMillis)
+        let solarTimes = store.solarTimes(for: Date(timeIntervalSince1970: TimeInterval(item.prediction.aosTimeMillis) / 1000))
         let passProgress = isInProgress
             ? Double(now - item.prediction.aosTimeMillis) / Double(passDuration)
             : 0
@@ -356,6 +366,13 @@ private struct PassesView: View {
                     .foregroundStyle(SkyPalette.muted)
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
+                if let solarTimes {
+                    Text("SUNRISE \(store.formattedSolarTime(solarTimes.sunriseTimeMillis))  ·  SUNSET \(store.formattedSolarTime(solarTimes.sunsetTimeMillis))")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(SkyPalette.muted)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
             }
             PassProfile(
                 maximumElevation: item.prediction.maximumElevationDegrees,
@@ -481,6 +498,21 @@ private struct PassesView: View {
             Text(title).font(.system(size: 11, weight: .bold, design: .rounded)).tracking(1.6).foregroundStyle(SkyPalette.accent)
             Text(detail).font(.caption).foregroundStyle(SkyPalette.muted)
         }
+    }
+
+    private func passGroupDetail(_ group: PassGroup) -> String {
+        guard let solarTimes = group.solarTimes else {
+            return "\(group.items.count) upcoming passes"
+        }
+        return "Sunrise \(store.formattedSolarTime(solarTimes.sunriseTimeMillis)) · Sunset \(store.formattedSolarTime(solarTimes.sunsetTimeMillis)) · \(group.items.count) upcoming passes"
+    }
+
+    private var deepSpaceDetail: String {
+        let count = store.visibleDeepSpaceObjects.count
+        guard let solarTimes = store.deepSpaceSolarTimes else {
+            return "Orbital period ≥225 min · \(count) entries"
+        }
+        return "≥225 min orbit · Sunrise \(store.formattedSolarTime(solarTimes.sunriseTimeMillis)) · Sunset \(store.formattedSolarTime(solarTimes.sunsetTimeMillis)) · \(count) entries"
     }
 
     private func emptyCard(_ title: String, detail: String, icon: String) -> some View {

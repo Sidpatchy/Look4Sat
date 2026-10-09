@@ -30,6 +30,18 @@ struct TrackedPosition: Sendable {
     let isAboveHorizon: Bool
 }
 
+struct SkyMapPositions: Sendable {
+    let sunLatitudeDegrees: Double
+    let sunLongitudeDegrees: Double
+    let moonLatitudeDegrees: Double
+    let moonLongitudeDegrees: Double
+}
+
+struct SolarTimes: Sendable {
+    let sunriseTimeMillis: Int64
+    let sunsetTimeMillis: Int64
+}
+
 struct LiveSatelliteReading: Sendable {
     let catalogNumber: Int32
     let position: TrackedPosition
@@ -73,6 +85,11 @@ private struct SatelliteSnapshot: Sendable {
     let passes: [PredictedPass]
 }
 
+private struct SolarTimeSnapshot: Sendable {
+    let byDay: [Int64: SolarTimes]
+    let deepSpace: SolarTimes?
+}
+
 private struct ParsedCatalog: @unchecked Sendable {
     let satellites: [SatelliteTarget]
 }
@@ -91,6 +108,7 @@ struct PassItem: Identifiable {
 struct PassGroup: Identifiable {
     let dateLabel: String
     let items: [PassItem]
+    let solarTimes: SolarTimes?
     var id: String { dateLabel }
 }
 
@@ -290,6 +308,9 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     @Published private(set) var satellites: [SatelliteTarget] = []
     @Published private(set) var passes: [PassItem] = []
     @Published private(set) var positions: [Int32: TrackedPosition] = [:]
+    @Published private(set) var skyMapPositions: SkyMapPositions?
+    @Published private(set) var solarTimesByDay: [Int64: SolarTimes] = [:]
+    @Published private(set) var deepSpaceSolarTimes: SolarTimes?
     @Published private(set) var transceivers: [IOSTransponder] = []
     @Published var selectedTransponderUUID: String? = UserDefaults.standard.string(forKey: "selectedTransponderUUID") {
         didSet { UserDefaults.standard.set(selectedTransponderUUID, forKey: "selectedTransponderUUID") }
@@ -586,15 +607,50 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         let formatter = DateFormatter()
         formatter.dateStyle = .full
         formatter.timeStyle = .none
-        formatter.timeZone = preferences.isUTC ? TimeZone(secondsFromGMT: 0) : .current
-        let grouped = Dictionary(grouping: remaining) { item in
-            formatter.string(from: Date(timeIntervalSince1970: TimeInterval(item.prediction.aosTimeMillis) / 1000))
+        let timeZone = preferences.isUTC ? TimeZone(secondsFromGMT: 0)! : .current
+        formatter.timeZone = timeZone
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let grouped = Dictionary(grouping: remaining) { item -> Int64 in
+            let date = Date(timeIntervalSince1970: TimeInterval(item.prediction.aosTimeMillis) / 1000)
+            return Int64(calendar.startOfDay(for: date).timeIntervalSince1970 * 1000)
         }
-        return grouped.map { dateLabel, items in
-            PassGroup(dateLabel: dateLabel, items: items.sorted { $0.prediction.aosTimeMillis < $1.prediction.aosTimeMillis })
+        return grouped.map { dayStartMillis, items in
+            let day = Date(timeIntervalSince1970: TimeInterval(dayStartMillis) / 1000)
+            return PassGroup(
+                dateLabel: formatter.string(from: day),
+                items: items.sorted { $0.prediction.aosTimeMillis < $1.prediction.aosTimeMillis },
+                solarTimes: solarTimesByDay[dayStartMillis]
+            )
         }.sorted {
             ($0.items.first?.prediction.aosTimeMillis ?? 0) < ($1.items.first?.prediction.aosTimeMillis ?? 0)
         }
+    }
+
+    func solarTimes(for date: Date = Date()) -> SolarTimes? {
+        let timeZone = preferences.isUTC ? TimeZone(secondsFromGMT: 0)! : .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        let dayStartMillis = Int64(calendar.startOfDay(for: date).timeIntervalSince1970 * 1000)
+        return solarTimesByDay[dayStartMillis]
+    }
+
+    func formattedSolarTime(_ millis: Int64?) -> String {
+        guard let millis, millis > 0 else { return "--:--" }
+        return formattedTime(millis, dateStyle: .none)
+    }
+
+    func updateSkyMapPositions() async {
+        let timeMillis = Int64(Date().timeIntervalSince1970 * 1000)
+        skyMapPositions = await Task.detached(priority: .utility) {
+            let position = SkyPositionCalculator().mapPositions(timeMillis: timeMillis)
+            return SkyMapPositions(
+                sunLatitudeDegrees: position.sunLatitudeDegrees,
+                sunLongitudeDegrees: position.sunLongitudeDegrees,
+                moonLatitudeDegrees: position.moonLatitudeDegrees,
+                moonLongitudeDegrees: position.moonLongitudeDegrees
+            )
+        }.value
     }
 
     func selectAllSatellitesInFilter() {
@@ -647,6 +703,8 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     func recalculatePasses() async {
         guard let location = observerLocation, !satellites.isEmpty else {
             passes = []
+            solarTimesByDay = [:]
+            deepSpaceSolarTimes = nil
             return
         }
         let selected = filterBySelectedModes(satellites).filter { selectedIDs.contains($0.catalogNumber) }
@@ -724,13 +782,61 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
                 )
             }
         }.value
-        positions = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.catalogNumber, $0.position) })
-        livePosition.set(catalogNumber: focusedSatelliteID, position: positions[focusedSatelliteID])
         let byID = Dictionary(uniqueKeysWithValues: selected.map { ($0.catalogNumber, $0) })
-        passes = snapshots.flatMap { snapshot -> [PassItem] in
+        let predictedPasses = snapshots.flatMap { snapshot -> [PassItem] in
             guard let satellite = byID[snapshot.catalogNumber] else { return [] }
             return snapshot.passes.map { PassItem(satellite: satellite, prediction: $0) }
         }.sorted { $0.prediction.aosTimeMillis < $1.prediction.aosTimeMillis }
+        let timeZone = preferences.isUTC ? TimeZone(secondsFromGMT: 0)! : .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        var firstAosByDay: [Int64: Int64] = [:]
+        for item in predictedPasses where !item.satellite.isDeepSpace {
+            let date = Date(timeIntervalSince1970: TimeInterval(item.prediction.aosTimeMillis) / 1000)
+            let dayStart = Int64(calendar.startOfDay(for: date).timeIntervalSince1970 * 1000)
+            if let previous = firstAosByDay[dayStart] {
+                firstAosByDay[dayStart] = min(previous, item.prediction.aosTimeMillis)
+            } else {
+                firstAosByDay[dayStart] = item.prediction.aosTimeMillis
+            }
+        }
+        let orderedDays = firstAosByDay.sorted { $0.key < $1.key }
+        let hasDeepSpace = predictedPasses.contains(where: { $0.satellite.isDeepSpace })
+        let solarTimes = await Task.detached(priority: .utility) {
+            let calculator = SkyPositionCalculator()
+            var results: [Int64: SolarTimes] = [:]
+            for (dayStart, firstAos) in orderedDays {
+                let events = calculator.findSunRiseSet(
+                    latitude: lat,
+                    longitude: lon,
+                    altitudeMeters: altitude,
+                    startTimeMillis: firstAos
+                )
+                results[dayStart] = SolarTimes(
+                    sunriseTimeMillis: events.sunriseTimeMillis,
+                    sunsetTimeMillis: events.sunsetTimeMillis
+                )
+            }
+            var deepSpaceEvents: SolarTimes?
+            if hasDeepSpace {
+                let events = calculator.findSunRiseSet(
+                    latitude: lat,
+                    longitude: lon,
+                    altitudeMeters: altitude,
+                    startTimeMillis: now
+                )
+                deepSpaceEvents = SolarTimes(
+                    sunriseTimeMillis: events.sunriseTimeMillis,
+                    sunsetTimeMillis: events.sunsetTimeMillis
+                )
+            }
+            return SolarTimeSnapshot(byDay: results, deepSpace: deepSpaceEvents)
+        }.value
+        positions = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.catalogNumber, $0.position) })
+        livePosition.set(catalogNumber: focusedSatelliteID, position: positions[focusedSatelliteID])
+        solarTimesByDay = solarTimes.byDay
+        deepSpaceSolarTimes = solarTimes.deepSpace
+        passes = predictedPasses
     }
 
     func position(for satellite: SatelliteTarget) -> TrackedPosition? {
