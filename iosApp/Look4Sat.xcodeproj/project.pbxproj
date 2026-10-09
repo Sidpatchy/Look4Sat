@@ -83,7 +83,7 @@
 		A50000000000000000000002 /* Project object */ = {
 			isa = PBXProject;
 			attributes = {
-				BuildIndependentTargetsIn parallel = 1;
+				BuildIndependentTargetsInParallel = 1;
 				LastUpgradeCheck = 2600;
 				TargetAttributes = {
 					A50000000000000000000001 = {CreatedOnToolsVersion = 26.0; };
