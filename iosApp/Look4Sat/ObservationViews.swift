@@ -121,7 +121,6 @@ private struct RadarDisplay: View {
                         low: store.passFilters.lowHighlightElevation,
                         high: store.passFilters.highHighlightElevation
                     ),
-                    pointingAzimuthDegrees: correctedAimAzimuth + (flipRadar ? 180 : 0),
                     pointingElevationDegrees: correctedAimElevation,
                     showsPointingMarker: store.preferences.useCompass && orientation.isAvailable,
                     showsSweep: store.preferences.showSweep
@@ -291,12 +290,16 @@ private final class RadarOrientationManager: ObservableObject {
 
         motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
         motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
-            guard error == nil, let attitude = motion?.attitude else { return }
+            guard error == nil, let motion else { return }
+            let attitude = motion.attitude
             // Convert Core Motion's yaw into clockwise radar azimuth. Its north axis is
             // one quarter-turn from the phone's long axis, so remove that fixed offset.
             var azimuth = (-attitude.yaw * 180 / .pi - 90).truncatingRemainder(dividingBy: 360)
             if azimuth < 0 { azimuth += 360 }
-            let elevation = attitude.pitch * 180 / .pi
+            // Use fused gravity for the screen-normal tilt; this makes forward/back
+            // motion drive only the radar's vertical aim coordinate.
+            let screenUp = min(1, max(-1, -motion.gravity.z))
+            let elevation = asin(screenUp) * 180 / .pi
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.recentAzimuths.append(azimuth)
@@ -1877,7 +1880,6 @@ private struct PolarRadarPlot: View {
     let trajectory: [TrackedPosition]
     let rotationDegrees: Double
     let positionColor: Color
-    let pointingAzimuthDegrees: Double
     let pointingElevationDegrees: Double
     let showsPointingMarker: Bool
     let showsSweep: Bool
@@ -1888,59 +1890,69 @@ private struct PolarRadarPlot: View {
             let radius = diameter * 0.405
             let center = CGPoint(x: geometry.size.width / 2, y: geometry.size.height / 2)
             ZStack {
-                if showsSweep {
-                    RadarSweepOverlay()
+                ZStack {
+                    if showsSweep {
+                        RadarSweepOverlay()
+                    }
+
+                    Canvas { context, _ in
+                        for elevation in [0.0, 30.0, 60.0] {
+                            let ringRadius = radius * CGFloat(1 - elevation / 90)
+                            let rect = CGRect(
+                                x: center.x - ringRadius,
+                                y: center.y - ringRadius,
+                                width: ringRadius * 2,
+                                height: ringRadius * 2
+                            )
+                            context.stroke(Path(ellipseIn: rect), with: .color(SkyPalette.primary.opacity(0.22)), lineWidth: 1)
+                        }
+                        var axes = Path()
+                        axes.move(to: CGPoint(x: center.x - radius, y: center.y))
+                        axes.addLine(to: CGPoint(x: center.x + radius, y: center.y))
+                        axes.move(to: CGPoint(x: center.x, y: center.y - radius))
+                        axes.addLine(to: CGPoint(x: center.x, y: center.y + radius))
+                        context.stroke(axes, with: .color(SkyPalette.primary.opacity(0.2)), lineWidth: 1)
+
+                        for path in visibleTrackPaths(trajectory, center: center, radius: radius) {
+                            context.stroke(path, with: .color(SkyPalette.violet.opacity(0.75)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        }
+
+                        if position.elevationDegrees > 0 {
+                            let satellitePoint = radarPoint(position, center: center, radius: radius)
+                            let dotRadius: CGFloat = 7
+                            let dot = Path(ellipseIn: CGRect(
+                                x: satellitePoint.x - dotRadius,
+                                y: satellitePoint.y - dotRadius,
+                                width: dotRadius * 2,
+                                height: dotRadius * 2
+                            ))
+                            context.fill(dot, with: .color(positionColor))
+                            context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
+                        }
+                    }
+                    Text("N").position(x: center.x, y: center.y - radius - 13)
+                    Text("E").position(x: center.x + radius + 13, y: center.y)
+                    Text("S").position(x: center.x, y: center.y + radius + 13)
+                    Text("W").position(x: center.x - radius - 13, y: center.y)
                 }
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(SkyPalette.muted)
+                .rotationEffect(.degrees(rotationDegrees))
+                .animation(.linear(duration: 1.0 / 60.0), value: rotationDegrees)
 
-                Canvas { context, _ in
-                    for elevation in [0.0, 30.0, 60.0] {
-                        let ringRadius = radius * CGFloat(1 - elevation / 90)
-                        let rect = CGRect(
-                            x: center.x - ringRadius,
-                            y: center.y - ringRadius,
-                            width: ringRadius * 2,
-                            height: ringRadius * 2
-                        )
-                        context.stroke(Path(ellipseIn: rect), with: .color(SkyPalette.primary.opacity(0.22)), lineWidth: 1)
-                    }
-                    var axes = Path()
-                    axes.move(to: CGPoint(x: center.x - radius, y: center.y))
-                    axes.addLine(to: CGPoint(x: center.x + radius, y: center.y))
-                    axes.move(to: CGPoint(x: center.x, y: center.y - radius))
-                    axes.addLine(to: CGPoint(x: center.x, y: center.y + radius))
-                    context.stroke(axes, with: .color(SkyPalette.primary.opacity(0.2)), lineWidth: 1)
-
-                    for path in visibleTrackPaths(trajectory, center: center, radius: radius) {
-                        context.stroke(path, with: .color(SkyPalette.violet.opacity(0.75)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
-                    }
-
-                    if position.elevationDegrees > 0 {
-                        let satellitePoint = radarPoint(position, center: center, radius: radius)
-                        let dotRadius: CGFloat = 7
-                        let dot = Path(ellipseIn: CGRect(
-                            x: satellitePoint.x - dotRadius,
-                            y: satellitePoint.y - dotRadius,
-                            width: dotRadius * 2,
-                            height: dotRadius * 2
-                        ))
-                        context.fill(dot, with: .color(positionColor))
-                        context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
-                    }
-
-                    if showsPointingMarker {
-                        let aim = radarPoint(
-                            azimuth: pointingAzimuthDegrees,
-                            elevation: abs(pointingElevationDegrees),
-                            center: center,
-                            radius: radius
-                        )
-                        let reticleRadius: CGFloat = 9
-                        let reticle = Path(ellipseIn: CGRect(
-                            x: aim.x - reticleRadius,
-                            y: aim.y - reticleRadius,
-                            width: reticleRadius * 2,
-                            height: reticleRadius * 2
-                        ))
+                if showsPointingMarker {
+                    let magnitude = min(90, abs(pointingElevationDegrees))
+                    let distance = radius * CGFloat(1 - magnitude / 90)
+                    let verticalDirection: CGFloat = pointingElevationDegrees < 0 ? 1 : -1
+                    let aim = CGPoint(x: center.x, y: center.y + verticalDirection * distance)
+                    let reticleRadius: CGFloat = 9
+                    let reticle = Path(ellipseIn: CGRect(
+                        x: aim.x - reticleRadius,
+                        y: aim.y - reticleRadius,
+                        width: reticleRadius * 2,
+                        height: reticleRadius * 2
+                    ))
+                    Canvas { context, _ in
                         context.stroke(reticle, with: .color(.red), lineWidth: 2)
                         var crosshair = Path()
                         crosshair.move(to: CGPoint(x: aim.x - 14, y: aim.y))
@@ -1949,17 +1961,10 @@ private struct PolarRadarPlot: View {
                         crosshair.addLine(to: CGPoint(x: aim.x, y: aim.y + 14))
                         context.stroke(crosshair, with: .color(.red.opacity(0.9)), lineWidth: 1.5)
                     }
+                    .allowsHitTesting(false)
                 }
-                Text("N").position(x: center.x, y: center.y - radius - 13)
-                Text("E").position(x: center.x + radius + 13, y: center.y)
-                Text("S").position(x: center.x, y: center.y + radius + 13)
-                Text("W").position(x: center.x - radius - 13, y: center.y)
             }
-            .font(.system(size: 11, weight: .bold, design: .rounded))
-            .foregroundStyle(SkyPalette.muted)
         }
-        .rotationEffect(.degrees(rotationDegrees))
-        .animation(.linear(duration: 1.0 / 60.0), value: rotationDegrees)
         .aspectRatio(1, contentMode: .fit)
         .padding(12)
     }
