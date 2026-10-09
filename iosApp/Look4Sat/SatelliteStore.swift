@@ -116,6 +116,7 @@ struct Look4SatPreferences: Sendable, Equatable {
     var useCompass = true
     var lightTheme = false
     var nightMode = false
+    var useBackSideAsAim = false
     var compassAzimuthOffset = 0.0
     var compassElevationOffset = 0.0
 
@@ -128,6 +129,7 @@ struct Look4SatPreferences: Sendable, Equatable {
             useCompass: defaults.object(forKey: "useCompass") as? Bool ?? true,
             lightTheme: defaults.bool(forKey: "lightTheme"),
             nightMode: defaults.bool(forKey: "nightMode"),
+            useBackSideAsAim: defaults.bool(forKey: "useBackSideAsAim"),
             compassAzimuthOffset: defaults.double(forKey: "compassAzimuthOffset"),
             compassElevationOffset: defaults.double(forKey: "compassElevationOffset")
         )
@@ -141,6 +143,7 @@ struct Look4SatPreferences: Sendable, Equatable {
         defaults.set(useCompass, forKey: "useCompass")
         defaults.set(lightTheme, forKey: "lightTheme")
         defaults.set(nightMode, forKey: "nightMode")
+        defaults.set(useBackSideAsAim, forKey: "useBackSideAsAim")
         defaults.set(compassAzimuthOffset, forKey: "compassAzimuthOffset")
         defaults.set(compassElevationOffset, forKey: "compassElevationOffset")
     }
@@ -956,7 +959,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let records = root["data"] as? [[String: Any]] else { return [] }
         return records.compactMap { record in
-            guard let id = record["id"] as? String,
+            guard let id = (record["id"] as? String) ?? (record["id"] as? NSNumber)?.stringValue,
                   let name = record["name"] as? String,
                   let reportedAt = record["reported_time"] as? String,
                   let timestamp = parseISODate(reportedAt) else { return nil }

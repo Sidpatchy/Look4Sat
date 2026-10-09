@@ -5,24 +5,38 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum SkyPalette {
-    static let ink = Color(uiColor: .systemBackground)
-    static let primary = Color(uiColor: .label)
-    static let violet = Color(uiColor: .tertiaryLabel)
-    static let cyan = Color(uiColor: .systemTeal)
-    static let muted = Color(uiColor: .secondaryLabel)
+    static let ink = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 18 / 255, green: 18 / 255, blue: 18 / 255, alpha: 1)
+            : UIColor(red: 1, green: 248 / 255, blue: 240 / 255, alpha: 1)
+    })
+    static let primary = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 224 / 255, green: 224 / 255, blue: 224 / 255, alpha: 1)
+            : UIColor(red: 30 / 255, green: 27 / 255, blue: 19 / 255, alpha: 1)
+    })
+    static let secondary = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 224 / 255, green: 224 / 255, blue: 224 / 255, alpha: 1)
+            : UIColor(red: 104 / 255, green: 94 / 255, blue: 64 / 255, alpha: 1)
+    })
+    static let accent = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1, green: 224 / 255, blue: 130 / 255, alpha: 1)
+            : UIColor(red: 113 / 255, green: 92 / 255, blue: 12 / 255, alpha: 1)
+    })
+    static let muted = Color(uiColor: UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 176 / 255, green: 176 / 255, blue: 176 / 255, alpha: 1)
+            : UIColor(red: 76 / 255, green: 70 / 255, blue: 57 / 255, alpha: 1)
+    })
 
     static func elevationColor(_ elevation: Double, low: Double, high: Double) -> Color {
         let lowThreshold = min(low, high)
         let highThreshold = max(low, high)
-        if elevation < lowThreshold { return Color(uiColor: .systemRed) }
-        if elevation < highThreshold {
-            return Color(uiColor: UIColor { traits in
-                traits.userInterfaceStyle == .dark
-                    ? UIColor(red: 1.0, green: 0.78, blue: 0.20, alpha: 1)
-                    : UIColor(red: 0.62, green: 0.42, blue: 0.00, alpha: 1)
-            })
-        }
-        return Color(uiColor: .systemGreen)
+        if elevation < lowThreshold { return Color(red: 239 / 255, green: 83 / 255, blue: 80 / 255) }
+        if elevation < highThreshold { return accent }
+        return Color(red: 102 / 255, green: 187 / 255, blue: 106 / 255)
     }
 }
 
@@ -59,7 +73,7 @@ struct ContentView: View {
                 NavigationStack { PassesView(store: store, onSelectSatellite: openRadar) }
                     .tabItem { Label("Passes", systemImage: "sparkles") }
                     .tag(Look4SatTab.passes)
-                NavigationStack { SatellitesView(store: store, onSelectSatellite: openRadar) }
+                NavigationStack { SatelliteAreaView(store: store, onSelectSatellite: openRadar) }
                     .tabItem { Label("Satellites", systemImage: "antenna.radiowaves.left.and.right") }
                     .tag(Look4SatTab.satellites)
                 NavigationStack {
@@ -80,14 +94,11 @@ struct ContentView: View {
                 }
                 .tabItem { Label("Map", systemImage: "map") }
                 .tag(Look4SatTab.map)
-                NavigationStack { AmsatStatusView(store: store) }
-                    .tabItem { Label("AMSAT", systemImage: "chart.bar.xaxis") }
-                    .tag(Look4SatTab.status)
                 NavigationStack { SettingsView(store: store) }
                     .tabItem { Label("Settings", systemImage: "slider.horizontal.3") }
                     .tag(Look4SatTab.settings)
             }
-            .tint(SkyPalette.cyan)
+            .tint(SkyPalette.accent)
         }
     }
 
@@ -107,8 +118,44 @@ private enum Look4SatTab: Hashable {
     case satellites
     case radar
     case map
-    case status
     case settings
+}
+
+private enum SatelliteSection: Hashable {
+    case catalog
+    case amsat
+}
+
+private struct SatelliteAreaView: View {
+    @ObservedObject var store: SatelliteStore
+    let onSelectSatellite: (SatelliteTarget) -> Void
+    @State private var selectedSection: SatelliteSection = .catalog
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Picker("Satellite section", selection: $selectedSection) {
+                Label("Satellites", systemImage: "antenna.radiowaves.left.and.right")
+                    .tag(SatelliteSection.catalog)
+                Label("AMSAT", systemImage: "chart.bar.xaxis")
+                    .tag(SatelliteSection.amsat)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 18)
+            .padding(.top, 8)
+
+            Group {
+                switch selectedSection {
+                case .catalog:
+                    SatellitesView(store: store, onSelectSatellite: onSelectSatellite)
+                case .amsat:
+                    AmsatStatusView(store: store)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(SkyPalette.ink.opacity(0.4))
+        .toolbar(.hidden, for: .navigationBar)
+    }
 }
 
 private struct PassesView: View {
@@ -191,7 +238,7 @@ private struct PassesView: View {
             .orbitalGlass(cornerRadius: 18)
             Button { isShowingModes = true } label: {
                 Image(systemName: "waveform.path")
-                    .foregroundStyle(store.selectedSatelliteModes.isEmpty ? SkyPalette.primary : SkyPalette.cyan)
+                    .foregroundStyle(store.selectedSatelliteModes.isEmpty ? SkyPalette.primary : SkyPalette.accent)
                     .frame(width: 46, height: 46)
                     .orbitalGlass(cornerRadius: 18)
             }
@@ -210,11 +257,11 @@ private struct PassesView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 7) {
-                    Circle().fill(SkyPalette.cyan).frame(width: 7, height: 7)
+                    Circle().fill(SkyPalette.accent).frame(width: 7, height: 7)
                     Text("LOOK4SAT  /  LIVE SKY")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .tracking(1.8)
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                 }
                 Text("Passes")
                     .font(.system(size: 36, weight: .bold, design: .rounded))
@@ -241,7 +288,7 @@ private struct PassesView: View {
         VStack(alignment: .leading, spacing: 16) {
             Image(systemName: "location.north.circle.fill")
                 .font(.system(size: 32))
-                .foregroundStyle(SkyPalette.cyan)
+                .foregroundStyle(SkyPalette.accent)
             Text("Your sky, precisely")
                 .font(.title2.bold())
             Text("Look4Sat uses your location to calculate satellite passes overhead. Your coordinates stay on this device.")
@@ -254,7 +301,7 @@ private struct PassesView: View {
                     .foregroundStyle(SkyPalette.ink)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    .background(SkyPalette.cyan, in: Capsule())
+                    .background(SkyPalette.accent, in: Capsule())
             }
         }
         .padding(22)
@@ -274,7 +321,7 @@ private struct PassesView: View {
                 Label(isInProgress ? "PASS IN PROGRESS" : "NEXT PASS", systemImage: "arrow.up.right")
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .tracking(1.6)
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
                 Spacer()
                 Text("NORAD  \(item.satellite.catalogNumber)")
                     .font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -299,7 +346,7 @@ private struct PassesView: View {
             if let position = store.position(for: item.satellite) {
                 HStack(spacing: 7) {
                     Circle()
-                        .fill(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.violet)
+                        .fill(position.isAboveHorizon ? SkyPalette.accent : SkyPalette.secondary)
                         .frame(width: 6, height: 6)
                     Text(position.isAboveHorizon ? "ABOVE HORIZON" : "BELOW HORIZON")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
@@ -335,10 +382,10 @@ private struct PassesView: View {
             : store.formattedTime(item.prediction.aosTimeMillis, dateStyle: .none)
         return HStack(spacing: 14) {
             ZStack {
-                Circle().fill(SkyPalette.violet.opacity(0.2)).frame(width: 42, height: 42)
+                Circle().fill(SkyPalette.secondary.opacity(0.2)).frame(width: 42, height: 42)
                  Image(systemName: "antenna.radiowaves.left.and.right")
                     .font(.system(size: 17, weight: .medium))
-                    .foregroundStyle(SkyPalette.violet)
+                    .foregroundStyle(SkyPalette.secondary)
             }
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.satellite.name)
@@ -359,7 +406,7 @@ private struct PassesView: View {
             Spacer()
             Text(time)
                 .font(.system(.caption, design: .monospaced).weight(.medium))
-                .foregroundStyle(SkyPalette.cyan)
+                .foregroundStyle(SkyPalette.accent)
         }
         .padding(15)
         .orbitalGlass(cornerRadius: 20)
@@ -381,14 +428,14 @@ private struct PassesView: View {
 
     private func sectionTitle(_ title: String, detail: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.system(size: 11, weight: .bold, design: .rounded)).tracking(1.6).foregroundStyle(SkyPalette.cyan)
+            Text(title).font(.system(size: 11, weight: .bold, design: .rounded)).tracking(1.6).foregroundStyle(SkyPalette.accent)
             Text(detail).font(.caption).foregroundStyle(SkyPalette.muted)
         }
     }
 
     private func emptyCard(_ title: String, detail: String, icon: String) -> some View {
         VStack(spacing: 12) {
-            Image(systemName: icon).font(.system(size: 28)).foregroundStyle(SkyPalette.violet)
+            Image(systemName: icon).font(.system(size: 28)).foregroundStyle(SkyPalette.secondary)
             Text(title).font(.headline)
             Text(detail).font(.subheadline).foregroundStyle(SkyPalette.muted).multilineTextAlignment(.center)
         }
@@ -423,7 +470,7 @@ private struct SatellitesView: View {
                     Text("CATALOG")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .tracking(1.8)
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                     Text("Satellites")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                 }
@@ -459,12 +506,12 @@ private struct SatellitesView: View {
                 Button("Clear") { store.clearAllSatellitesInFilter() }
             }
             .font(.caption.weight(.semibold))
-            .foregroundStyle(SkyPalette.cyan)
+            .foregroundStyle(SkyPalette.accent)
             .padding(.horizontal, 2)
 
             if store.satellites.isEmpty && store.isLoading {
                 Spacer()
-                ProgressView("Loading orbital catalog…").tint(SkyPalette.cyan)
+                ProgressView("Loading orbital catalog…").tint(SkyPalette.accent)
                 Spacer()
             } else if store.satellites.isEmpty {
                 ContentUnavailableView("Catalog unavailable", systemImage: "antenna.radiowaves.left.and.right", description: Text("Pull down to retry when you have a network connection."))
@@ -520,11 +567,11 @@ private struct SatellitesView: View {
             Button { onSelectSatellite(satellite) } label: {
                 HStack(spacing: 13) {
                     ZStack {
-                        Circle().fill(selected ? SkyPalette.cyan.opacity(0.16) : SkyPalette.primary.opacity(0.06))
+                        Circle().fill(selected ? SkyPalette.accent.opacity(0.16) : SkyPalette.primary.opacity(0.06))
                             .frame(width: 40, height: 40)
                          Image(systemName: "antenna.radiowaves.left.and.right")
                             .font(.system(size: 16))
-                            .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
+                            .foregroundStyle(selected ? SkyPalette.accent : SkyPalette.muted)
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text(satellite.name)
@@ -537,7 +584,7 @@ private struct SatellitesView: View {
                         if let pass {
                             Text("AOS \(store.formattedTime(pass.prediction.aosTimeMillis, dateStyle: .none)) · LOS \(store.formattedTime(pass.prediction.losTimeMillis, dateStyle: .none))")
                                 .font(.system(size: 8, weight: .medium, design: .monospaced))
-                                .foregroundStyle(SkyPalette.cyan)
+                                .foregroundStyle(SkyPalette.accent)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.75)
                         }
@@ -553,7 +600,7 @@ private struct SatellitesView: View {
             Button { store.toggle(satellite) } label: {
                 Image(systemName: selected ? "checkmark.circle.fill" : "plus.circle")
                     .font(.system(size: 21))
-                    .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.muted)
+                    .foregroundStyle(selected ? SkyPalette.accent : SkyPalette.muted)
                     .frame(width: 34, height: 42)
                     .contentShape(Rectangle())
             }
@@ -581,7 +628,7 @@ private struct SettingsView: View {
                     Text("PREFERENCES")
                         .font(.system(size: 11, weight: .bold, design: .rounded))
                         .tracking(1.8)
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                     Text("Settings")
                         .font(.system(size: 34, weight: .bold, design: .rounded))
                 }
@@ -605,22 +652,22 @@ private struct SettingsView: View {
                         HStack {
                             Label("Download latest elements", systemImage: "arrow.down.circle")
                             Spacer()
-                            if store.isLoading { ProgressView().tint(SkyPalette.cyan) }
+                            if store.isLoading { ProgressView().tint(SkyPalette.accent) }
                         }
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                     }
                     .disabled(store.isLoading)
                     .padding(.top, 5)
                     Button { isShowingSources = true } label: {
                         Label("Manage data sources", systemImage: "list.bullet.rectangle")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                     Button { isImportingElements = true } label: {
                         Label("Import TLE / OMM file", systemImage: "square.and.arrow.down")
                             .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                     Button(role: .destructive) { store.clearOrbitalData() } label: {
                         Label("Clear saved orbital data", systemImage: "trash")
@@ -637,6 +684,7 @@ private struct SettingsView: View {
                 settingsCard(title: "RADAR & COMPASS", icon: "dot.scope") {
                     PreferenceToggle(title: "Radar sweep", detail: "Animate the radar sweep line.", isOn: $store.preferences.showSweep)
                     PreferenceToggle(title: "Show phone pointing direction", detail: "Use device motion to align the radar and show its aim reticle.", isOn: $store.preferences.useCompass)
+                    PreferenceToggle(title: "Use phone back as aim direction", detail: "Off: use the phone’s top edge. On: use the screen’s outward-facing direction.", isOn: $store.preferences.useBackSideAsAim, isDisabled: !store.preferences.useCompass)
                     OffsetSlider(title: "Azimuth offset", value: $store.preferences.compassAzimuthOffset, range: -180...180)
                     OffsetSlider(title: "Elevation offset", value: $store.preferences.compassElevationOffset, range: -90...90)
                 }
@@ -651,15 +699,15 @@ private struct SettingsView: View {
                 settingsCard(title: "RADIO OUTPUT & CAT", icon: "antenna.radiowaves.left.and.right") {
                     Button { radioSettingsPage = .network } label: {
                         Label("Network rotator and frequency output", systemImage: "network")
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                     Button { radioSettingsPage = .bluetooth } label: {
                         Label("Bluetooth output", systemImage: "dot.radiowaves.left.and.right")
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                     Button { radioSettingsPage = .cat } label: {
                         Label("CAT radio control", systemImage: "radio")
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                 }
                 settingsCard(title: "ABOUT LOOK4SAT", icon: "sparkles") {
@@ -683,7 +731,7 @@ private struct SettingsView: View {
                         Button("What’s new") { isShowingWhatsNew = true }
                     }
                     .font(.caption.weight(.semibold))
-                    .tint(SkyPalette.cyan)
+                    .tint(SkyPalette.accent)
                 }
             }
             .padding(20)
@@ -751,7 +799,7 @@ private struct SettingsView: View {
             Label(title, systemImage: icon)
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(1.2)
-                .foregroundStyle(SkyPalette.cyan)
+                .foregroundStyle(SkyPalette.accent)
             content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -768,7 +816,7 @@ private struct SatelliteModesSheetButton: View {
         Button { isPresented = true } label: {
             Label("Choose radio modes", systemImage: "checklist")
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(SkyPalette.cyan)
+                .foregroundStyle(SkyPalette.accent)
         }
         .sheet(isPresented: $isPresented) {
             SatelliteModesSheet(
@@ -855,21 +903,22 @@ private struct Starfield: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                LinearGradient(
-                    colors: colorScheme == .dark
-                        ? [SkyPalette.ink, Color(uiColor: .secondarySystemBackground), SkyPalette.ink]
-                        : [Color(uiColor: .systemGroupedBackground), SkyPalette.ink, Color(uiColor: .secondarySystemGroupedBackground)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-                RadialGradient(colors: [SkyPalette.cyan.opacity(0.045), .clear], center: .topTrailing, startRadius: 20, endRadius: geometry.size.width * 0.85)
-                Canvas { context, size in
-                    for index in 0..<70 {
-                        let x = CGFloat((index * 73 + 19) % 997) / 997 * size.width
-                        let y = CGFloat((index * 137 + 43) % 991) / 991 * size.height
-                        let diameter: CGFloat = index.isMultiple(of: 9) ? 1.6 : 0.9
-                        let star = Path(ellipseIn: CGRect(x: x, y: y, width: diameter, height: diameter))
-                        context.fill(star, with: .color(SkyPalette.primary.opacity(index.isMultiple(of: 5) ? 0.24 : 0.08)))
+                SkyPalette.ink
+                if colorScheme == .dark {
+                    RadialGradient(
+                        colors: [SkyPalette.accent.opacity(0.035), .clear],
+                        center: .topTrailing,
+                        startRadius: 20,
+                        endRadius: geometry.size.width * 0.85
+                    )
+                    Canvas { context, size in
+                        for index in 0..<36 {
+                            let x = CGFloat((index * 73 + 19) % 997) / 997 * size.width
+                            let y = CGFloat((index * 137 + 43) % 991) / 991 * size.height
+                            let diameter: CGFloat = 1
+                            let star = Path(ellipseIn: CGRect(x: x, y: y, width: diameter, height: diameter))
+                            context.fill(star, with: .color(SkyPalette.primary.opacity(0.08)))
+                        }
                     }
                 }
             }

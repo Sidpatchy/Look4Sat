@@ -105,12 +105,11 @@ private struct RadarDisplay: View {
         Group {
             if let position {
                 let correctedAimElevation = orientation.elevationDegrees + store.preferences.compassElevationOffset
-                let flipRadar = correctedAimElevation < 0
                 let correctedAimAzimuth = orientation.azimuthDegrees + store.preferences.compassAzimuthOffset
                 let displayedAimAzimuth = (correctedAimAzimuth.truncatingRemainder(dividingBy: 360) + 360)
                     .truncatingRemainder(dividingBy: 360)
                 let rotation = store.preferences.useCompass
-                    ? -orientation.rotationHeadingDegrees - store.preferences.compassAzimuthOffset + (flipRadar ? 180 : 0)
+                    ? -orientation.rotationHeadingDegrees - store.preferences.compassAzimuthOffset
                     : 0
                 PolarRadarPlot(
                     position: position,
@@ -131,7 +130,7 @@ private struct RadarDisplay: View {
 
                 HStack(spacing: 8) {
                     Image(systemName: "scope")
-                        .foregroundStyle(orientation.isAvailable ? SkyPalette.cyan : SkyPalette.muted)
+                        .foregroundStyle(orientation.isAvailable ? SkyPalette.accent : SkyPalette.muted)
                     if store.preferences.useCompass && orientation.isAvailable {
                         Text("PHONE AIM  ·  AZ \(String(format: "%.0f°", displayedAimAzimuth))  EL \(String(format: "%+.0f°", correctedAimElevation))")
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
@@ -152,6 +151,17 @@ private struct RadarDisplay: View {
                 }
                 .padding(.horizontal, 4)
 
+                if orientation.shouldWarnCalibration {
+                    Label(
+                        "Compass accuracy is low. Move away from magnets and move the phone in a figure-eight.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+                }
+
                 HStack(spacing: 10) {
                     radarMetric("AZIMUTH", value: String(format: "%.1f°", position.azimuthDegrees))
                     radarElevationMetric(position.elevationDegrees, filters: store.passFilters)
@@ -163,10 +173,12 @@ private struct RadarDisplay: View {
                     systemImage: position.isAboveHorizon ? "dot.radiowaves.left.and.right" : "moon"
                 )
                 .font(.subheadline.weight(.medium))
-                .foregroundStyle(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.muted)
+                .foregroundStyle(position.isAboveHorizon ? SkyPalette.accent : SkyPalette.muted)
                 .padding(.horizontal, 4)
                 Text(store.preferences.useCompass && orientation.isAvailable
-                    ? "Phone-relative radar; the red reticle marks where the top of your phone points."
+                    ? (store.preferences.useBackSideAsAim
+                        ? "Phone-relative radar; the red reticle marks where the back of your phone points."
+                        : "Phone-relative radar; the red reticle marks where the top of your phone points.")
                     : "North-up polar view; distance from the center represents elevation.")
                     .font(.caption)
                     .foregroundStyle(SkyPalette.muted)
@@ -177,6 +189,7 @@ private struct RadarDisplay: View {
         }
         .onAppear { updateOrientationUpdates() }
         .onChange(of: store.preferences.useCompass) { _, _ in updateOrientationUpdates() }
+        .onChange(of: store.preferences.useBackSideAsAim) { _, _ in updateOrientationUpdates() }
         .onDisappear { orientation.stop() }
     }
 
@@ -185,7 +198,7 @@ private struct RadarDisplay: View {
             orientation.stop()
             return
         }
-        orientation.start()
+        orientation.start(useBackSideAsAim: store.preferences.useBackSideAsAim)
     }
 }
 
@@ -211,7 +224,7 @@ private struct RadarPassTimer: View {
                     Text(active ? "TIME TO LOS" : "TIME TO AOS")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(1)
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                     Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
                         .font(.system(size: 20, weight: .bold, design: .monospaced))
                         .monospacedDigit()
@@ -231,7 +244,7 @@ private struct RadarPassTimer: View {
             Text(title)
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .tracking(1)
-                .foregroundStyle(emphasized ? SkyPalette.cyan : SkyPalette.muted)
+                .foregroundStyle(emphasized ? SkyPalette.accent : SkyPalette.muted)
             Text(millis.map { store.formattedTime($0, dateStyle: .none) } ?? "—")
                 .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 .foregroundStyle(SkyPalette.primary)
@@ -257,6 +270,7 @@ private final class RadarOrientationManager: ObservableObject {
         var elevationDegrees = 0.0
         var isAvailable = false
         var northReference = "REL"
+        var shouldWarnCalibration = false
     }
 
     @Published private var sample = Sample()
@@ -266,12 +280,22 @@ private final class RadarOrientationManager: ObservableObject {
     var elevationDegrees: Double { sample.elevationDegrees }
     var isAvailable: Bool { sample.isAvailable }
     var northReference: String { sample.northReference }
+    var shouldWarnCalibration: Bool { sample.shouldWarnCalibration }
 
     private let motionManager = CMMotionManager()
     private var recentAzimuths: [Double] = []
     private var recentElevations: [Double] = []
+    private var useBackSideAsAim = false
 
-    func start() {
+    func start(useBackSideAsAim: Bool) {
+        let shouldRestart = motionManager.isDeviceMotionActive && self.useBackSideAsAim != useBackSideAsAim
+        self.useBackSideAsAim = useBackSideAsAim
+        if shouldRestart {
+            motionManager.stopDeviceMotionUpdates()
+            recentAzimuths.removeAll(keepingCapacity: true)
+            recentElevations.removeAll(keepingCapacity: true)
+            sample.isAvailable = false
+        }
         guard !motionManager.isDeviceMotionActive, motionManager.isDeviceMotionAvailable else { return }
         let availableFrames = CMMotionManager.availableAttitudeReferenceFrames()
         let referenceFrame: CMAttitudeReferenceFrame
@@ -289,17 +313,20 @@ private final class RadarOrientationManager: ObservableObject {
         }
 
         motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
+        let aimWithBack = useBackSideAsAim
         motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
             guard error == nil, let motion else { return }
-            let attitude = motion.attitude
-            // Convert Core Motion's yaw into clockwise radar azimuth. Its north axis is
-            // one quarter-turn from the phone's long axis, so remove that fixed offset.
-            var azimuth = (-attitude.yaw * 180 / .pi - 90).truncatingRemainder(dividingBy: 360)
+            let magneticAccuracy = motion.magneticField.accuracy
+            let calibrationWarning = magneticAccuracy == .uncalibrated || magneticAccuracy == .low
+            let matrix = motion.attitude.rotationMatrix
+            // The matrix maps world coordinates into device coordinates, so each
+            // device axis expressed in world space is read from its matrix row.
+            let north = aimWithBack ? Double(matrix.m31) : Double(matrix.m21)
+            let west = aimWithBack ? Double(matrix.m32) : Double(matrix.m22)
+            let up = aimWithBack ? Double(matrix.m33) : Double(matrix.m23)
+            var azimuth = atan2(-west, north) * 180 / .pi
             if azimuth < 0 { azimuth += 360 }
-            // Use fused gravity for the screen-normal tilt; this makes forward/back
-            // motion drive only the radar's vertical aim coordinate.
-            let screenUp = min(1, max(-1, -motion.gravity.z))
-            let elevation = asin(screenUp) * 180 / .pi
+            let elevation = asin(min(1, max(-1, up))) * 180 / .pi
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.recentAzimuths.append(azimuth)
@@ -324,6 +351,7 @@ private final class RadarOrientationManager: ObservableObject {
                         updated.elevationDegrees = filteredElevation
                     }
                 }
+                updated.shouldWarnCalibration = calibrationWarning && updated.northReference != "REL"
                 updated.isAvailable = true
                 self.sample = updated
             }
@@ -368,14 +396,14 @@ private struct TransceiversPanel: View {
                 Button { Task { await store.refreshTransceivers() } } label: {
                     Label("Refresh transceivers", systemImage: "arrow.clockwise")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                 }
             } else {
                 HStack {
                     Text("TRANSPONDERS")
                         .font(.system(size: 10, weight: .bold, design: .rounded))
                         .tracking(1.4)
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                     Spacer()
                     Text("\(radios.count)")
                         .font(.caption.monospacedDigit())
@@ -402,7 +430,7 @@ private struct TransceiversPanel: View {
             VStack(alignment: .leading, spacing: 11) {
                 HStack(spacing: 9) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
-                        .foregroundStyle(selected ? SkyPalette.cyan : SkyPalette.violet)
+                        .foregroundStyle(selected ? SkyPalette.accent : SkyPalette.secondary)
                     Text(radio.title)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(SkyPalette.primary)
@@ -440,7 +468,7 @@ private struct TransceiversPanel: View {
             Text(title).font(.system(size: 9, weight: .bold, design: .rounded)).tracking(1).foregroundStyle(SkyPalette.muted)
             Text(frequencyRange(low, high))
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(SkyPalette.cyan)
+                .foregroundStyle(SkyPalette.accent)
         }
     }
 
@@ -477,7 +505,7 @@ private struct DopplerCalculatorPanel: View {
                 Text("DOPPLER CALCULATOR")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.3)
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
                 Spacer()
                 Text("TX ↔ RX")
                     .font(.caption2.monospaced())
@@ -504,7 +532,7 @@ private struct DopplerCalculatorPanel: View {
                     Text(transponder.isInverted ? "INVERTED" : "NORMAL")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(1)
-                        .foregroundStyle(transponder.isInverted ? .orange : SkyPalette.cyan)
+                        .foregroundStyle(transponder.isInverted ? .orange : SkyPalette.accent)
                 }
                 frequencyControl(
                     title: "UPLINK · TX",
@@ -552,12 +580,12 @@ private struct DopplerCalculatorPanel: View {
             }
             HStack(spacing: 8) {
                 Button { onChange(max(Double(low), value.wrappedValue - 1_000)) } label: {
-                    Image(systemName: "minus.circle").font(.title3).foregroundStyle(SkyPalette.cyan)
+                    Image(systemName: "minus.circle").font(.title3).foregroundStyle(SkyPalette.accent)
                 }
                 Slider(value: Binding(get: { value.wrappedValue }, set: onChange), in: Double(low)...Double(max(low, high)))
-                    .tint(SkyPalette.cyan)
+                    .tint(SkyPalette.accent)
                 Button { onChange(min(Double(high), value.wrappedValue + 1_000)) } label: {
-                    Image(systemName: "plus.circle").font(.title3).foregroundStyle(SkyPalette.cyan)
+                    Image(systemName: "plus.circle").font(.title3).foregroundStyle(SkyPalette.accent)
                 }
             }
             HStack {
@@ -658,11 +686,11 @@ private struct SstvPanel: View {
                 Text("SSTV IMAGE DECODER")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.2)
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
                 Spacer()
                 Text(capture.isRecording ? "LISTENING" : "STANDBY")
                     .font(.system(size: 9, weight: .bold, design: .rounded))
-                    .foregroundStyle(capture.isRecording ? SkyPalette.cyan : SkyPalette.muted)
+                    .foregroundStyle(capture.isRecording ? SkyPalette.accent : SkyPalette.muted)
             }
             ZStack {
                 RoundedRectangle(cornerRadius: 18).fill(.black.opacity(0.7))
@@ -676,13 +704,13 @@ private struct SstvPanel: View {
                     VStack(spacing: 12) {
                         Image(systemName: capture.isRecording ? "waveform" : "photo")
                             .font(.system(size: 38))
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                         Text(capture.isRecording ? "Listening for SSTV signal" : "Decoded image appears here")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.85))
                         if capture.isRecording {
                             ProgressView(value: Double(capture.inputLevel), total: 1)
-                                .tint(SkyPalette.cyan)
+                                .tint(SkyPalette.accent)
                                 .padding(.horizontal, 24)
                         }
                     }
@@ -696,7 +724,7 @@ private struct SstvPanel: View {
                 ForEach(capture.supportedModes, id: \.self) { Text($0).tag($0) }
             }
             .pickerStyle(.menu)
-            .tint(SkyPalette.cyan)
+            .tint(SkyPalette.accent)
             .onChange(of: selectedMode) { _, mode in capture.selectMode(mode) }
             .onChange(of: capture.supportedModes) { _, modes in
                 if !modes.contains(selectedMode) { selectedMode = "Auto" }
@@ -719,7 +747,7 @@ private struct SstvPanel: View {
                     }
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 12)
-                    .background(SkyPalette.violet, in: Capsule())
+                    .background(SkyPalette.secondary, in: Capsule())
                     .foregroundStyle(SkyPalette.primary)
                 }
                 .disabled(capture.decodedImage == nil || capture.isSavingImage)
@@ -730,7 +758,7 @@ private struct SstvPanel: View {
                     Label(capture.isRecording ? "Stop" : "Record", systemImage: capture.isRecording ? "pause.fill" : "record.circle")
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
-                        .background(capture.isRecording ? SkyPalette.violet : SkyPalette.cyan, in: Capsule())
+                        .background(capture.isRecording ? SkyPalette.secondary : SkyPalette.accent, in: Capsule())
                         .foregroundStyle(SkyPalette.ink)
                 }
             }
@@ -745,7 +773,7 @@ private struct SstvPanel: View {
                 Text(error).font(.caption).foregroundStyle(.orange)
             }
             if let saveMessage = capture.saveMessage {
-                Text(saveMessage).font(.caption).foregroundStyle(SkyPalette.cyan)
+                Text(saveMessage).font(.caption).foregroundStyle(SkyPalette.accent)
             }
             Text("Microphone audio is processed on device.")
                 .font(.caption2)
@@ -1031,16 +1059,16 @@ struct OrbitMapView: View {
                    let position = store.position(for: satellite) {
                     let footprint = footprintBoundary(for: position)
                     MapPolygon(coordinates: footprint)
-                        .foregroundStyle(SkyPalette.cyan.opacity(0.12))
+                        .foregroundStyle(SkyPalette.accent.opacity(0.12))
                     MapPolyline(coordinates: footprint, contourStyle: .geodesic)
-                        .stroke(SkyPalette.cyan.opacity(0.7), lineWidth: 1.5)
+                        .stroke(SkyPalette.accent.opacity(0.7), lineWidth: 1.5)
                 }
 
                 ForEach(groundTrackSegments(groundTrack).indices, id: \.self) { index in
                     let segment = groundTrackSegments(groundTrack)[index]
                     if segment.count > 1 {
                         MapPolyline(coordinates: segment.map { coordinate(for: $0) })
-                            .stroke(SkyPalette.cyan, style: StrokeStyle(lineWidth: 3, dash: [6, 5]))
+                            .stroke(SkyPalette.accent, style: StrokeStyle(lineWidth: 3, dash: [6, 5]))
                     }
                 }
 
@@ -1048,7 +1076,7 @@ struct OrbitMapView: View {
                     Annotation("You", coordinate: location.coordinate) {
                         Image(systemName: "location.fill")
                             .font(.system(size: 16, weight: .bold))
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                             .padding(9)
                             .background(.black.opacity(0.72), in: Circle())
                     }
@@ -1063,7 +1091,7 @@ struct OrbitMapView: View {
                                     .foregroundStyle(SkyPalette.primary)
                                     .padding(10)
                                     .background(
-                                        satellite.catalogNumber == selectedSatelliteID ? SkyPalette.violet : SkyPalette.ink,
+                                        satellite.catalogNumber == selectedSatelliteID ? SkyPalette.secondary : SkyPalette.ink,
                                         in: Circle()
                                     )
                                     .overlay(Circle().strokeBorder(SkyPalette.primary.opacity(0.5), lineWidth: 1))
@@ -1091,7 +1119,7 @@ struct OrbitMapView: View {
                 if let satellite = store.satellite(withID: selectedSatelliteID),
                    let position = store.position(for: satellite) {
                     HStack(spacing: 8) {
-                        Circle().fill(SkyPalette.cyan.opacity(0.65)).frame(width: 8, height: 8)
+                        Circle().fill(SkyPalette.accent.opacity(0.65)).frame(width: 8, height: 8)
                         Text("\(satellite.name)  ·  \(String(format: "%+.0f° elevation", position.elevationDegrees))")
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(SkyPalette.primary)
@@ -1100,7 +1128,7 @@ struct OrbitMapView: View {
                         Text("FOOTPRINT")
                             .font(.system(size: 8, weight: .bold, design: .rounded))
                             .tracking(0.8)
-                            .foregroundStyle(SkyPalette.cyan)
+                            .foregroundStyle(SkyPalette.accent)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -1188,7 +1216,7 @@ struct AmsatStatusView: View {
 
             if store.amsatRows.isEmpty && store.isRefreshingAmsat {
                 Spacer()
-                ProgressView("Loading satellite activity…").tint(SkyPalette.cyan)
+                ProgressView("Loading satellite activity…").tint(SkyPalette.accent)
                 Spacer()
             } else if store.amsatRows.isEmpty {
                 ContentUnavailableView(
@@ -1199,24 +1227,8 @@ struct AmsatStatusView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 5) {
-                        HStack(spacing: 5) {
-                            Text("SATELLITE")
-                                .font(.system(size: 9, weight: .bold, design: .rounded))
-                                .tracking(1)
-                                .foregroundStyle(SkyPalette.cyan)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            ForEach(store.amsatDays) { day in
-                                Text(day.label.uppercased())
-                                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                                    .tracking(0.5)
-                                    .foregroundStyle(SkyPalette.cyan)
-                                    .frame(width: 50)
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 9)
-
+                    LazyVStack(spacing: 5, pinnedViews: [.sectionHeaders]) {
+                        Section {
                         ForEach(store.amsatRows) { row in
                             HStack(spacing: 5) {
                                 Text(row.name)
@@ -1247,6 +1259,9 @@ struct AmsatStatusView: View {
                             .padding(.vertical, 5)
                             .background(SkyPalette.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                         }
+                        } header: {
+                            tableHeader
+                        }
                     }
                     .padding(.bottom, 20)
                 }
@@ -1262,6 +1277,29 @@ struct AmsatStatusView: View {
             AmsatReportSheet(selection: selection, store: store)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var tableHeader: some View {
+        HStack(spacing: 5) {
+            Text("SATELLITE")
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(1)
+                .foregroundStyle(SkyPalette.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            ForEach(store.amsatDays) { day in
+                Text(day.label.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                    .tracking(0.5)
+                    .foregroundStyle(SkyPalette.accent)
+                    .frame(width: 50)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(SkyPalette.ink)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(SkyPalette.muted.opacity(0.25)).frame(height: 0.5)
         }
     }
 
@@ -1311,10 +1349,10 @@ struct PassFilterSheet: View {
                             Spacer()
                             Text("\(Int(draft.minimumElevation))°")
                                 .monospacedDigit()
-                                .foregroundStyle(SkyPalette.cyan)
+                                .foregroundStyle(SkyPalette.accent)
                         }
                         Slider(value: $draft.minimumElevation, in: 0...60, step: 1)
-                            .tint(SkyPalette.cyan)
+                            .tint(SkyPalette.accent)
                     }
                 } header: {
                     Text("Pass quality")
@@ -1367,14 +1405,14 @@ struct PassFilterSheet: View {
                 Spacer()
                 Text(timeLabel(value.wrappedValue))
                     .monospacedDigit()
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
             }
             Slider(
                 value: Binding(get: { Double(value.wrappedValue) }, set: { value.wrappedValue = Int($0.rounded()) }),
                 in: 0...1_439,
                 step: 15
             )
-            .tint(SkyPalette.cyan)
+            .tint(SkyPalette.accent)
         }
     }
 
@@ -1385,9 +1423,9 @@ struct PassFilterSheet: View {
                 Spacer()
                 Text("\(Int(value.wrappedValue))°")
                     .monospacedDigit()
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
             }
-            Slider(value: value, in: 0...90, step: 1).tint(SkyPalette.cyan)
+            Slider(value: value, in: 0...90, step: 1).tint(SkyPalette.accent)
         }
     }
 
@@ -1452,7 +1490,7 @@ struct DataSourcesSheet: View {
             ForEach(entries) { $entry in
                 VStack(alignment: .leading, spacing: 8) {
                     HStack {
-                        Toggle("", isOn: $entry.isEnabled).labelsHidden().tint(SkyPalette.cyan)
+                        Toggle("", isOn: $entry.isEnabled).labelsHidden().tint(SkyPalette.accent)
                         TextField("Source URL", text: $entry.url)
                             .font(.caption.monospaced())
                             .textInputAutocapitalization(.never)
@@ -1461,7 +1499,7 @@ struct DataSourcesSheet: View {
                     if let code = statuses[entry.url] {
                         Text(code == -1 ? "Last request failed" : "Last response: HTTP \(code)")
                             .font(.caption2)
-                            .foregroundStyle(code == 200 ? SkyPalette.cyan : .orange)
+                            .foregroundStyle(code == 200 ? SkyPalette.accent : .orange)
                             .padding(.leading, 45)
                     }
                 }
@@ -1671,7 +1709,7 @@ struct SatelliteModesSheet: View {
                                 Text(mode).foregroundStyle(SkyPalette.primary)
                                 Spacer()
                                 if selection.contains(mode) {
-                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(SkyPalette.cyan)
+                                    Image(systemName: "checkmark.circle.fill").foregroundStyle(SkyPalette.accent)
                                 } else {
                                     Image(systemName: "circle").foregroundStyle(SkyPalette.muted)
                                 }
@@ -1772,7 +1810,7 @@ private struct AmsatReportSheet: View {
                             Text(error).font(.caption).foregroundStyle(.red)
                         }
                         if let message = store.amsatUploadMessage {
-                            Text(message).font(.caption).foregroundStyle(SkyPalette.cyan)
+                            Text(message).font(.caption).foregroundStyle(SkyPalette.accent)
                         }
                         Button {
                             isConfirmingUpload = true
@@ -1850,7 +1888,7 @@ private struct SatellitePicker: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: "antenna.radiowaves.left.and.right")
-                    .foregroundStyle(SkyPalette.cyan)
+                    .foregroundStyle(SkyPalette.accent)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(selectedSatellite?.name ?? "No satellite selected")
                         .font(.subheadline.weight(.semibold))
@@ -1914,7 +1952,7 @@ private struct PolarRadarPlot: View {
                         context.stroke(axes, with: .color(SkyPalette.primary.opacity(0.2)), lineWidth: 1)
 
                         for path in visibleTrackPaths(trajectory, center: center, radius: radius) {
-                            context.stroke(path, with: .color(SkyPalette.violet.opacity(0.75)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            context.stroke(path, with: .color(SkyPalette.secondary.opacity(0.75)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                         }
 
                         if position.elevationDegrees > 0 {
@@ -2058,9 +2096,9 @@ private struct RadarSweepOverlay: View {
                                 gradient: Gradient(stops: [
                                     .init(color: .clear, location: 0),
                                     .init(color: .clear, location: 0.77),
-                                    .init(color: SkyPalette.cyan.opacity(0.015), location: 0.80),
-                                    .init(color: SkyPalette.cyan.opacity(0.08), location: 0.91),
-                                    .init(color: SkyPalette.cyan.opacity(0.28), location: 0.995),
+                                    .init(color: SkyPalette.accent.opacity(0.015), location: 0.80),
+                                    .init(color: SkyPalette.accent.opacity(0.08), location: 0.91),
+                                    .init(color: SkyPalette.accent.opacity(0.28), location: 0.995),
                                     .init(color: .clear, location: 1)
                                 ]),
                                 center: .center,
@@ -2072,10 +2110,10 @@ private struct RadarSweepOverlay: View {
                         .rotationEffect(.degrees(angle))
 
                     Rectangle()
-                        .fill(SkyPalette.cyan.opacity(0.92))
+                        .fill(SkyPalette.accent.opacity(0.92))
                         .frame(width: 1.5, height: radius)
                         .offset(y: -radius / 2)
-                        .shadow(color: SkyPalette.cyan.opacity(0.7), radius: 2)
+                        .shadow(color: SkyPalette.accent.opacity(0.7), radius: 2)
                         .rotationEffect(.degrees(angle))
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2091,7 +2129,7 @@ private func pageHeading(eyebrow: String, title: String) -> some View {
         Text(eyebrow)
             .font(.system(size: 11, weight: .bold, design: .rounded))
             .tracking(1.8)
-            .foregroundStyle(SkyPalette.cyan)
+            .foregroundStyle(SkyPalette.accent)
         Text(title)
             .font(.system(size: 34, weight: .bold, design: .rounded))
             .foregroundStyle(SkyPalette.primary)
@@ -2145,7 +2183,7 @@ private func observationEmptyState(store: SatelliteStore) -> some View {
     VStack(spacing: 14) {
         Image(systemName: store.observerLocation == nil ? "location.slash" : "dot.scope")
             .font(.system(size: 30))
-            .foregroundStyle(SkyPalette.violet)
+            .foregroundStyle(SkyPalette.secondary)
         Text(store.observerLocation == nil ? "Location needed" : "Tracking data unavailable")
             .font(.headline)
             .foregroundStyle(SkyPalette.primary)
@@ -2162,7 +2200,7 @@ private func observationEmptyState(store: SatelliteStore) -> some View {
                     .foregroundStyle(SkyPalette.ink)
                     .padding(.horizontal, 18)
                     .padding(.vertical, 12)
-                    .background(SkyPalette.cyan, in: Capsule())
+                    .background(SkyPalette.accent, in: Capsule())
             }
         }
     }
@@ -2204,12 +2242,12 @@ struct LocationSettings: View {
                 Button(action: store.useDeviceLocation) {
                     Label("Use GPS", systemImage: "location.fill")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                 }
                 Button { isShowingEditor = true } label: {
                     Label("Enter location", systemImage: "mappin.and.ellipse")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(SkyPalette.cyan)
+                        .foregroundStyle(SkyPalette.accent)
                 }
             }
             if store.manualLocation != nil {
@@ -2239,7 +2277,7 @@ struct PreferenceToggle: View {
                 Text(detail).font(.caption).foregroundStyle(SkyPalette.muted)
             }
         }
-        .tint(SkyPalette.cyan)
+        .tint(SkyPalette.accent)
         .disabled(isDisabled)
         .padding(.vertical, 3)
     }
@@ -2257,7 +2295,7 @@ struct OffsetSlider: View {
                 Spacer()
                 Text("\(Int(value))°").font(.caption.monospacedDigit()).foregroundStyle(SkyPalette.primary)
             }
-            Slider(value: $value, in: range, step: 1).tint(SkyPalette.cyan)
+            Slider(value: $value, in: range, step: 1).tint(SkyPalette.accent)
         }
     }
 }
