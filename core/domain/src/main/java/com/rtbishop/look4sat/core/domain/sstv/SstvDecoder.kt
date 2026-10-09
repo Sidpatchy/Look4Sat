@@ -89,13 +89,20 @@ class SstvDecoder(
     )
     private var lastInputRms = 0f
     private var lastAppliedGain = 1f
+    private var lastFrame: SstvFrame? = null
     private val _qualityMetrics = MutableStateFlow<SstvQualityMetrics?>(null)
     private val preFilter = if (enablePreFilter) HighPassFilter(preFilterCutoffHz, sampleRate.toDouble()) else null
     private val diagnosticsHandle = SstvDiagnosticsHandle(enableDiagnosticsHandle, _qualityMetrics)
     val frames: SharedFlow<SstvFrame> = _frames
     val supportedModes: List<String> = decoder.allModes.map { it.name }
+    val currentFrame: SstvFrame? get() = lastFrame
 
-    suspend fun feedSamples(samples: FloatArray) = withContext(Dispatchers.Default) {
+    suspend fun feedSamples(samples: FloatArray) {
+        withContext(Dispatchers.Default) { processSamples(samples) }
+    }
+
+    /** Synchronous entry point for native audio queues that already provide serialized samples. */
+    fun processSamples(samples: FloatArray): SstvFrame? {
         // Optional pre-filtering: remove DC offset and subsonic noise that can mask
         // weak signals and corrupt the RMS normalization baseline.
         preFilter?.apply(samples)
@@ -109,7 +116,7 @@ class SstvDecoder(
         lastInputRms = gain.inputRms
         lastAppliedGain = gain.appliedGain
         val hasNewLines = decoder.process(samples, channelSelect)
-        if (hasNewLines) emitFrame()
+        return if (hasNewLines) emitFrame() else null
     }
 
     fun lockMode(modeName: String) = decoder.setMode(modeName)
@@ -117,6 +124,7 @@ class SstvDecoder(
     fun clearPixels() {
         imageBuffer.line = -1
         imageBuffer.pixels.fill(0)
+        lastFrame = null
         decoder.resetQuality()
         if (enableDiagnosticsHandle) _qualityMetrics.value = null
     }
@@ -139,7 +147,7 @@ class SstvDecoder(
         )
     }
 
-    private fun emitFrame() {
+    private fun emitFrame(): SstvFrame {
         val imageWidth = imageBuffer.width
         val imageHeight = imageBuffer.height
         val quality = decoder.quality()
@@ -160,8 +168,7 @@ class SstvDecoder(
         val scopePixels = if (includeScopeData) scopeBuffer.pixels.copyOf() else null
         val scopeWidth = if (includeScopeData) scopeBuffer.width else 0
         val scopeHeight = if (includeScopeData) scopeBuffer.height else 0
-        _frames.tryEmit(
-            SstvFrame(
+        val frame = SstvFrame(
                 scopePixels = scopePixels,
                 scopeWidth = scopeWidth,
                 scopeHeight = scopeHeight,
@@ -177,7 +184,9 @@ class SstvDecoder(
                 maxPredictedStreak = quality.maxPredictedStreak,
                 timingErrorSamples = quality.timingErrorSamples
             )
-        )
+        lastFrame = frame
+        _frames.tryEmit(frame)
+        return frame
     }
 
     // Target RMS level for the normalizer. 0.25 leaves headroom while keeping the
@@ -207,6 +216,26 @@ class SstvDecoder(
         }
         return GainInfo(rms, 1f)
     }
+}
+
+/** Synchronous sample-processing facade for native audio queues. */
+class SstvDecoderBridge(sampleRate: Int) {
+    private val decoder = SstvDecoder(
+        sampleRate = sampleRate,
+        targetRmsLevel = 0.45f,
+        enableRmsNormalization = true,
+        preFilterCutoffHz = 500.0,
+        enablePreFilter = true,
+        lineRecoveryStrategy = LineRecoveryStrategy.Robot36Compatible
+    )
+
+    val supportedModes: List<String> get() = decoder.supportedModes
+
+    fun processSamples(samples: FloatArray): SstvFrame? = decoder.processSamples(samples)
+
+    fun lockMode(modeName: String) = decoder.lockMode(modeName)
+
+    fun clearPixels() = decoder.clearPixels()
 }
 
 /**

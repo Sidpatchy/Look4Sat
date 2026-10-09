@@ -5,7 +5,9 @@ import CoreMotion
 import Foundation
 import Look4SatShared
 import MapKit
+import Photos
 import SwiftUI
+import UIKit
 
 private enum RadarPane: String, CaseIterable, Identifiable {
     case radar = "Radar"
@@ -23,6 +25,7 @@ struct RadarView: View {
 
     @State private var trajectory: [TrackedPosition] = []
     @State private var selectedPane: RadarPane = .radar
+    @StateObject private var sstvCapture = SstvAudioCapture()
 
     private var selectedPass: PassItem? { store.relevantPass(for: selectedSatelliteID) }
     private var trajectoryTaskKey: String { "\(selectedSatelliteID):\(selectedPass?.id ?? "none")" }
@@ -50,7 +53,7 @@ struct RadarView: View {
                 case .calculator:
                     DopplerCalculatorPanel(store: store, satelliteID: selectedSatelliteID)
                 case .sstv:
-                    SstvPanel()
+                    SstvPanel(capture: sstvCapture)
                 }
             }
             .padding(20)
@@ -63,6 +66,10 @@ struct RadarView: View {
         .task(id: trajectoryTaskKey) {
             await loadTrajectory()
         }
+        .onChange(of: selectedPane) { oldValue, newValue in
+            if oldValue == .sstv && newValue != .sstv { sstvCapture.stop() }
+        }
+        .onDisappear { sstvCapture.stop() }
     }
 
     private func loadTrajectory() async {
@@ -639,12 +646,8 @@ private enum DopplerEditedField: Equatable {
 }
 
 private struct SstvPanel: View {
-    @StateObject private var capture = SstvAudioCapture()
+    @ObservedObject var capture: SstvAudioCapture
     @AppStorage("sstvMode") private var selectedMode = "Auto"
-    private let modes = [
-        "Auto", "Wraase SC2-180", "Martin 1", "Martin 2", "Robot 36 Color", "Robot 72 Color",
-        "Scottie 1", "Scottie 2", "Scottie DX", "PD 50", "PD 90", "PD 120", "PD 160", "PD 180", "PD 240", "PD 290"
-    ]
 
     var body: some View {
         VStack(spacing: 16) {
@@ -660,17 +663,25 @@ private struct SstvPanel: View {
             }
             ZStack {
                 RoundedRectangle(cornerRadius: 18).fill(.black.opacity(0.7))
-                VStack(spacing: 12) {
-                    Image(systemName: capture.isRecording ? "waveform" : "photo")
-                        .font(.system(size: 38))
-                        .foregroundStyle(SkyPalette.violet)
-                    Text(capture.isRecording ? "Waiting for SSTV signal" : "Decoded image appears here")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.85))
-                    if capture.isRecording {
-                        ProgressView(value: Double(capture.inputLevel), total: 1)
-                            .tint(SkyPalette.cyan)
-                            .padding(.horizontal, 24)
+                if let image = capture.decodedImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding(8)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: capture.isRecording ? "waveform" : "photo")
+                            .font(.system(size: 38))
+                            .foregroundStyle(SkyPalette.cyan)
+                        Text(capture.isRecording ? "Listening for SSTV signal" : "Decoded image appears here")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.85))
+                        if capture.isRecording {
+                            ProgressView(value: Double(capture.inputLevel), total: 1)
+                                .tint(SkyPalette.cyan)
+                                .padding(.horizontal, 24)
+                        }
                     }
                 }
             }
@@ -679,10 +690,15 @@ private struct SstvPanel: View {
             .clipShape(RoundedRectangle(cornerRadius: 18))
 
             Picker("SSTV mode", selection: $selectedMode) {
-                ForEach(modes, id: \.self) { Text($0).tag($0) }
+                ForEach(capture.supportedModes, id: \.self) { Text($0).tag($0) }
             }
             .pickerStyle(.menu)
             .tint(SkyPalette.cyan)
+            .onChange(of: selectedMode) { _, mode in capture.selectMode(mode) }
+            .onChange(of: capture.supportedModes) { _, modes in
+                if !modes.contains(selectedMode) { selectedMode = "Auto" }
+                capture.selectMode(selectedMode)
+            }
             HStack(spacing: 10) {
                 Button { capture.reset() } label: {
                     Label("Reset", systemImage: "trash")
@@ -691,9 +707,22 @@ private struct SstvPanel: View {
                         .background(.white.opacity(0.08), in: Capsule())
                         .foregroundStyle(.white)
                 }
+                .accessibilityLabel("Reset decoded SSTV image")
+                Button { capture.saveImage() } label: {
+                    HStack(spacing: 7) {
+                        if capture.isSavingImage { ProgressView().tint(SkyPalette.primary) }
+                        else { Image(systemName: "square.and.arrow.down") }
+                        Text("Save")
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(SkyPalette.violet, in: Capsule())
+                    .foregroundStyle(SkyPalette.primary)
+                }
+                .disabled(capture.decodedImage == nil || capture.isSavingImage)
                 Button {
                     if capture.isRecording { capture.stop() }
-                    else { capture.start() }
+                    else { capture.start(mode: selectedMode) }
                 } label: {
                     Label(capture.isRecording ? "Stop" : "Record", systemImage: capture.isRecording ? "pause.fill" : "record.circle")
                         .frame(maxWidth: .infinity)
@@ -702,20 +731,129 @@ private struct SstvPanel: View {
                         .foregroundStyle(SkyPalette.ink)
                 }
             }
+            if let quality = capture.qualitySummary {
+                Text(quality)
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(SkyPalette.muted)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
             if let error = capture.errorMessage {
                 Text(error).font(.caption).foregroundStyle(.orange)
+            }
+            if let saveMessage = capture.saveMessage {
+                Text(saveMessage).font(.caption).foregroundStyle(SkyPalette.cyan)
             }
             Text("Microphone audio is processed on device.")
                 .font(.caption2)
                 .foregroundStyle(SkyPalette.muted)
-            Text("Image decoding and saving are not available in this iOS build yet.")
-                .font(.caption2)
-                .foregroundStyle(.orange.opacity(0.85))
         }
         .padding(16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .orbitalGlass(cornerRadius: 24)
-        .onDisappear { capture.stop() }
+        .task { capture.selectMode(selectedMode) }
+    }
+}
+
+private struct DecodedSstvFrame: Sendable {
+    let rgbaPixels: [UInt8]
+    let width: Int
+    let height: Int
+    let modeName: String
+    let imageComplete: Bool
+    let inputRms: Float
+    let appliedGain: Float
+    let syncHitRate: Float
+    let predictedLineBursts: Int
+    let maxPredictedStreak: Int
+    let timingErrorSamples: Int
+}
+
+private final class SstvDecoderWorker: @unchecked Sendable {
+    var onFrame: ((DecodedSstvFrame) -> Void)?
+    var onModes: (([String]) -> Void)?
+
+    private let queue = DispatchQueue(label: "com.look4sat.sstv.decoder", qos: .userInitiated)
+    private let lock = NSLock()
+    private var isProcessing = false
+    private var decoder: SstvDecoderBridge?
+
+    func configure(sampleRate: Int, mode: String) {
+        queue.async { [weak self] in
+            guard let self else { return }
+            let decoder = SstvDecoderBridge(sampleRate: Int32(sampleRate))
+            decoder.lockMode(modeName: mode)
+            self.decoder = decoder
+            let modes = (decoder.supportedModes as? [String]) ?? []
+            DispatchQueue.main.async { self.onModes?(modes) }
+        }
+    }
+
+    func selectMode(_ mode: String) {
+        queue.async { [weak self] in self?.decoder?.lockMode(modeName: mode) }
+    }
+
+    func clear() {
+        queue.async { [weak self] in self?.decoder?.clearPixels() }
+    }
+
+    func submit(samples: [Float]) {
+        lock.lock()
+        guard !isProcessing else {
+            lock.unlock()
+            return
+        }
+        isProcessing = true
+        lock.unlock()
+
+        queue.async { [weak self] in
+            defer { self?.finishProcessing() }
+            guard let self, let decoder = self.decoder else { return }
+            let kotlinSamples = KotlinFloatArray(size: Int32(samples.count))
+            for (index, sample) in samples.enumerated() {
+                kotlinSamples.set(index: Int32(index), value: sample)
+            }
+            guard let frame = decoder.processSamples(samples: kotlinSamples),
+                  let decoded = Self.convert(frame) else { return }
+            self.onFrame?(decoded)
+        }
+    }
+
+    private func finishProcessing() {
+        lock.lock()
+        isProcessing = false
+        lock.unlock()
+    }
+
+    private static func convert(_ frame: SstvFrame) -> DecodedSstvFrame? {
+        guard let pixels = frame.imagePixels,
+              frame.imageWidth > 0,
+              frame.imageHeight > 0 else { return nil }
+        let width = Int(frame.imageWidth)
+        let height = Int(frame.imageHeight)
+        let count = width * height
+        var rgba = [UInt8](repeating: 255, count: count * 4)
+        for index in 0..<count {
+            let argb = UInt32(bitPattern: pixels.get(index: Int32(index)))
+            let offset = index * 4
+            rgba[offset] = UInt8((argb >> 16) & 0xff)
+            rgba[offset + 1] = UInt8((argb >> 8) & 0xff)
+            rgba[offset + 2] = UInt8(argb & 0xff)
+            rgba[offset + 3] = UInt8((argb >> 24) & 0xff)
+        }
+        return DecodedSstvFrame(
+            rgbaPixels: rgba,
+            width: width,
+            height: height,
+            modeName: frame.modeName,
+            imageComplete: frame.imageComplete,
+            inputRms: frame.inputRms,
+            appliedGain: frame.appliedGain,
+            syncHitRate: frame.syncHitRate,
+            predictedLineBursts: Int(frame.predictedLineBursts),
+            maxPredictedStreak: Int(frame.maxPredictedStreak),
+            timingErrorSamples: Int(frame.timingErrorSamples)
+        )
     }
 }
 
@@ -724,9 +862,31 @@ private final class SstvAudioCapture: ObservableObject {
     @Published private(set) var isRecording = false
     @Published private(set) var inputLevel: Float = 0
     @Published private(set) var errorMessage: String?
-    private let engine = AVAudioEngine()
+    @Published private(set) var saveMessage: String?
+    @Published private(set) var decodedImage: UIImage?
+    @Published private(set) var supportedModes = [
+        "Auto", "Wraase SC2-180", "Martin 1", "Martin 2", "Robot 36 Color", "Robot 72 Color",
+        "Scottie 1", "Scottie 2", "Scottie DX", "PD 50", "PD 90", "PD 120", "PD 160", "PD 180", "PD 240", "PD 290"
+    ]
+    @Published private(set) var qualitySummary: String?
 
-    func start() {
+    private let engine = AVAudioEngine()
+    private let decoderWorker = SstvDecoderWorker()
+    private var hasInputTap = false
+    private var hasActiveAudioSession = false
+
+    init() {
+        decoderWorker.onModes = { [weak self] modes in
+            Task { @MainActor [weak self] in
+                self?.supportedModes = ["Auto"] + modes
+            }
+        }
+        decoderWorker.onFrame = { [weak self] frame in
+            Task { @MainActor [weak self] in self?.display(frame) }
+        }
+    }
+
+    func start(mode: String) {
         AVAudioApplication.requestRecordPermission { [weak self] granted in
             Task { @MainActor in
                 guard let self else { return }
@@ -734,16 +894,21 @@ private final class SstvAudioCapture: ObservableObject {
                     self.errorMessage = "Microphone access is required to receive SSTV audio."
                     return
                 }
-                self.startCapture()
+                self.startCapture(mode: mode)
             }
         }
     }
 
     func stop() {
-        guard isRecording else { return }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        try? AVAudioSession.sharedInstance().setActive(false)
+        if hasInputTap {
+            engine.inputNode.removeTap(onBus: 0)
+            hasInputTap = false
+        }
+        if engine.isRunning { engine.stop() }
+        if hasActiveAudioSession {
+            try? AVAudioSession.sharedInstance().setActive(false)
+            hasActiveAudioSession = false
+        }
         isRecording = false
         inputLevel = 0
     }
@@ -751,33 +916,100 @@ private final class SstvAudioCapture: ObservableObject {
     func reset() {
         inputLevel = 0
         errorMessage = nil
+        saveMessage = nil
+        decodedImage = nil
+        qualitySummary = nil
+        decoderWorker.clear()
     }
 
-    private func startCapture() {
+    func selectMode(_ mode: String) {
+        decoderWorker.selectMode(mode)
+    }
+
+    func saveImage() {
+        guard let decodedImage else { return }
+        isSavingImage = true
+        saveMessage = nil
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { [weak self] status in
+            guard status == .authorized else {
+                Task { @MainActor [weak self] in
+                    self?.isSavingImage = false
+                    self?.saveMessage = "Allow Photos access to save decoded images."
+                }
+                return
+            }
+            PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: decodedImage)
+            } completionHandler: { [weak self] saved, error in
+                Task { @MainActor [weak self] in
+                    self?.isSavingImage = false
+                    self?.saveMessage = saved ? "Saved to Photos." : (error?.localizedDescription ?? "Could not save the image.")
+                }
+            }
+        }
+    }
+
+    @Published private(set) var isSavingImage = false
+
+    private func startCapture(mode: String) {
         guard !isRecording else { return }
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.record, mode: .measurement, options: [.mixWithOthers])
             try session.setActive(true)
+            hasActiveAudioSession = true
             let input = engine.inputNode
             let format = input.inputFormat(forBus: 0)
+            decoderWorker.configure(sampleRate: Int(format.sampleRate.rounded()), mode: mode)
             input.installTap(onBus: 0, bufferSize: 2_048, format: format) { [weak self] buffer, _ in
                 guard let channel = buffer.floatChannelData?[0] else { return }
                 let count = Int(buffer.frameLength)
                 guard count > 0 else { return }
+                let samples = Array(UnsafeBufferPointer(start: channel, count: count))
                 var squares = 0.0
-                for index in 0..<count { squares += Double(channel[index] * channel[index]) }
+                for sample in samples { squares += Double(sample * sample) }
                 let level = Float(min(1, sqrt(squares / Double(count)) * 3))
-                Task { @MainActor in self?.inputLevel = level }
+                Task { @MainActor [weak self] in
+                    self?.inputLevel = level
+                    self?.decoderWorker.submit(samples: samples)
+                }
             }
+            hasInputTap = true
             engine.prepare()
             try engine.start()
             errorMessage = nil
+            saveMessage = nil
             isRecording = true
         } catch {
             errorMessage = error.localizedDescription
             stop()
         }
+    }
+
+    private func display(_ frame: DecodedSstvFrame) {
+        guard let image = Self.makeImage(frame) else { return }
+        decodedImage = image
+        qualitySummary = "\(frame.modeName) · RMS \(String(format: "%.3f", frame.inputRms)) · Sync \(Int(frame.syncHitRate * 100))% · \(frame.imageComplete ? "Complete" : "Receiving")"
+    }
+
+    private static func makeImage(_ frame: DecodedSstvFrame) -> UIImage? {
+        let data = Data(frame.rgbaPixels)
+        guard let provider = CGDataProvider(data: data as CFData) else { return nil }
+        let info = CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue)
+        guard let image = CGImage(
+            width: frame.width,
+            height: frame.height,
+            bitsPerComponent: 8,
+            bitsPerPixel: 32,
+            bytesPerRow: frame.width * 4,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: info,
+            provider: provider,
+            decode: nil,
+            shouldInterpolate: false,
+            intent: .defaultIntent
+        ) else { return nil }
+        return UIImage(cgImage: image)
     }
 }
 

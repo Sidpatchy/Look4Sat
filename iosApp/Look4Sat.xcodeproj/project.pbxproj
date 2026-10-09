@@ -183,6 +183,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Look4Sat;
 				INFOPLIST_KEY_NSMotionUsageDescription = "Device motion is used on device to show the direction your phone is pointing on the radar.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone audio is processed on device for satellite SSTV reception.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save decoded SSTV images to your photo library.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used on this device to calculate satellite passes overhead.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
@@ -220,6 +221,7 @@
 				INFOPLIST_KEY_CFBundleDisplayName = Look4Sat;
 				INFOPLIST_KEY_NSMotionUsageDescription = "Device motion is used on device to show the direction your phone is pointing on the radar.";
 				INFOPLIST_KEY_NSMicrophoneUsageDescription = "Microphone audio is processed on device for satellite SSTV reception.";
+				INFOPLIST_KEY_NSPhotoLibraryAddUsageDescription = "Save decoded SSTV images to your photo library.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "Your location is used on this device to calculate satellite passes overhead.";
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;

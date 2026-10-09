@@ -33,20 +33,25 @@ internal class CoreDomainPlugin : Plugin<Project> {
             iosArm64().binaries.framework {
                 baseName = "Look4SatShared"
                 isStatic = true
+                export(libs.kotlin.coroutines)
             }
             iosSimulatorArm64().binaries.framework {
                 baseName = "Look4SatShared"
                 isStatic = true
+                export(libs.kotlin.coroutines)
             }
             iosX64().binaries.framework {
                 baseName = "Look4SatShared"
                 isStatic = true
+                export(libs.kotlin.coroutines)
             }
             val commonMain = sourceSets.getByName("commonMain")
             commonMain.kotlin.srcDir("src/main/java")
+            commonMain.dependencies {
+                api(libs.kotlin.coroutines)
+            }
             val jvmMain = sourceSets.getByName("jvmMain")
             jvmMain.dependencies {
-                implementation(libs.kotlin.coroutines)
                 implementation(libs.kotlin.serialization)
             }
             val jvmTest = sourceSets.getByName("jvmTest")
