@@ -438,7 +438,7 @@ private struct SatellitesView: View {
             } else {
                 List {
                     if store.searchText.isEmpty {
-                        Section("TRACKING  ·  \(store.selectedIDs.count)") {
+                        Section("TRACKING  ·  \(store.trackedSatellites.count)") {
                             ForEach(store.filteredSatellites, id: \.catalogNumber) { satellite in
                                 satelliteRow(satellite, onSelectSatellite: onSelectSatellite)
                             }
@@ -591,7 +591,7 @@ private struct SettingsView: View {
                 }
                 settingsCard(title: "RADAR & COMPASS", icon: "dot.scope") {
                     PreferenceToggle(title: "Radar sweep", detail: "Animate the radar sweep line.", isOn: $store.preferences.showSweep)
-                    PreferenceToggle(title: "Use compass heading", detail: "Rotate the radar using the device compass.", isOn: $store.preferences.useCompass)
+                    PreferenceToggle(title: "Show phone pointing direction", detail: "Use device motion to align the radar and show its aim reticle.", isOn: $store.preferences.useCompass)
                     OffsetSlider(title: "Azimuth offset", value: $store.preferences.compassAzimuthOffset, range: -180...180)
                     OffsetSlider(title: "Elevation offset", value: $store.preferences.compassElevationOffset, range: -90...90)
                 }

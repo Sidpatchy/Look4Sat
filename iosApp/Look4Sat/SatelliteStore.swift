@@ -288,7 +288,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     @Published private(set) var manualLocation: CLLocation? = SatelliteStore.loadManualLocation()
     @Published var selectedIDs: Set<Int32> = {
         let saved = (UserDefaults.standard.array(forKey: "trackedSatelliteIDs") as? [NSNumber])?.map(\.int32Value)
-        return Set(saved ?? [25544, 28654, 33591])
+        return Set(saved ?? [25544])
     }() {
         didSet {
             UserDefaults.standard.set(selectedIDs.map { Int($0) }, forKey: "trackedSatelliteIDs")
@@ -473,6 +473,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
             return
         }
         satellites = catalogByID.values.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+        pruneSelectionsToCatalog(satellites)
         lastUpdated = Date()
         statusMessage = nil
         if let cacheText { try? saveCache(cacheText) }
@@ -778,6 +779,11 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         return satellites.filter { matchingIDs.contains($0.catalogNumber) }
     }
 
+    private func pruneSelectionsToCatalog(_ satellites: [SatelliteTarget]) {
+        let catalogIDs = Set(satellites.map(\.catalogNumber))
+        selectedIDs.formIntersection(catalogIDs)
+    }
+
     private func matchesSatellite(_ satellite: SatelliteTarget, query: String) -> Bool {
         guard !query.isEmpty else { return true }
         if query.allSatisfy(\.isNumber) {
@@ -867,6 +873,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     private func loadCache() async {
         if let url = cacheURL, let csv = try? String(contentsOf: url, encoding: .utf8) {
             satellites = await Self.parseCatalog(csv)
+            if !satellites.isEmpty { pruneSelectionsToCatalog(satellites) }
             if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
                let modified = attributes[.modificationDate] as? Date {
                 lastUpdated = modified

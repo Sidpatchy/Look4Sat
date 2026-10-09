@@ -23,13 +23,6 @@ struct RadarView: View {
 
     @State private var trajectory: [TrackedPosition] = []
     @State private var selectedPane: RadarPane = .radar
-    @StateObject private var orientation = RadarOrientationManager()
-
-    private var satellite: SatelliteTarget? { store.satellite(withID: selectedSatelliteID) }
-    private var position: TrackedPosition? {
-        guard let satellite else { return nil }
-        return store.position(for: satellite)
-    }
 
     var body: some View {
         ScrollView {
@@ -47,7 +40,7 @@ struct RadarView: View {
 
                 switch selectedPane {
                 case .radar:
-                    radarContents
+                    RadarDisplay(store: store, satelliteID: selectedSatelliteID, trajectory: trajectory)
                 case .transceivers:
                     TransceiversPanel(store: store, satelliteID: selectedSatelliteID)
                 case .calculator:
@@ -66,10 +59,6 @@ struct RadarView: View {
         .task(id: selectedSatelliteID) {
             await loadTrajectory()
         }
-        .onAppear { updateOrientationUpdates() }
-        .onChange(of: selectedPane) { _, _ in updateOrientationUpdates() }
-        .onChange(of: store.preferences.useCompass) { _, _ in updateOrientationUpdates() }
-        .onDisappear { orientation.stop() }
     }
 
     private func loadTrajectory() async {
@@ -82,79 +71,96 @@ struct RadarView: View {
         )
     }
 
-    @ViewBuilder
-    private var radarContents: some View {
-        if let position {
-            let correctedAimElevation = orientation.elevationDegrees + store.preferences.compassElevationOffset
-            let flipRadar = correctedAimElevation < 0
-            let correctedAimAzimuth = orientation.azimuthDegrees + store.preferences.compassAzimuthOffset
-            let displayedAimAzimuth = (correctedAimAzimuth.truncatingRemainder(dividingBy: 360) + 360)
-                .truncatingRemainder(dividingBy: 360)
-            let rotation = store.preferences.useCompass
-                ? -correctedAimAzimuth + (flipRadar ? 180 : 0)
-                : 0
-            PolarRadarPlot(
-                position: position,
-                trajectory: trajectory,
-                rotationDegrees: rotation,
-                pointingAzimuthDegrees: correctedAimAzimuth + (flipRadar ? 180 : 0),
-                pointingElevationDegrees: correctedAimElevation,
-                showsPointingMarker: store.preferences.useCompass && orientation.isAvailable,
-                showsSweep: store.preferences.showSweep
-            )
-            .frame(maxWidth: 520)
-            .frame(maxWidth: .infinity)
-            .orbitalGlass(cornerRadius: 30)
+}
 
-            HStack(spacing: 8) {
-                Image(systemName: "scope")
-                    .foregroundStyle(orientation.isAvailable ? SkyPalette.cyan : SkyPalette.muted)
-                if store.preferences.useCompass && orientation.isAvailable {
-                    Text("PHONE AIM  ·  AZ \(String(format: "%.0f°", displayedAimAzimuth))  EL \(String(format: "%+.0f°", correctedAimElevation))")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(SkyPalette.primary)
-                    Spacer(minLength: 4)
-                    Text(orientation.northReference)
-                        .font(.system(size: 9, weight: .bold, design: .rounded))
-                        .foregroundStyle(SkyPalette.muted)
-                } else if store.preferences.useCompass {
-                    Text("Phone orientation sensor unavailable")
-                        .font(.caption)
-                        .foregroundStyle(SkyPalette.muted)
-                } else {
-                    Text("Pointing indicator disabled in Settings")
-                        .font(.caption)
-                        .foregroundStyle(SkyPalette.muted)
+private struct RadarDisplay: View {
+    @ObservedObject var store: SatelliteStore
+    let satelliteID: Int32
+    let trajectory: [TrackedPosition]
+    @StateObject private var orientation = RadarOrientationManager()
+
+    private var position: TrackedPosition? {
+        guard let satellite = store.satellite(withID: satelliteID) else { return nil }
+        return store.position(for: satellite)
+    }
+
+    var body: some View {
+        Group {
+            if let position {
+                let correctedAimElevation = orientation.elevationDegrees + store.preferences.compassElevationOffset
+                let flipRadar = correctedAimElevation < 0
+                let correctedAimAzimuth = orientation.azimuthDegrees + store.preferences.compassAzimuthOffset
+                let displayedAimAzimuth = (correctedAimAzimuth.truncatingRemainder(dividingBy: 360) + 360)
+                    .truncatingRemainder(dividingBy: 360)
+                let rotation = store.preferences.useCompass
+                    ? -orientation.rotationHeadingDegrees - store.preferences.compassAzimuthOffset + (flipRadar ? 180 : 0)
+                    : 0
+                PolarRadarPlot(
+                    position: position,
+                    trajectory: trajectory,
+                    rotationDegrees: rotation,
+                    pointingAzimuthDegrees: correctedAimAzimuth + (flipRadar ? 180 : 0),
+                    pointingElevationDegrees: correctedAimElevation,
+                    showsPointingMarker: store.preferences.useCompass && orientation.isAvailable,
+                    showsSweep: store.preferences.showSweep
+                )
+                .frame(maxWidth: 520)
+                .frame(maxWidth: .infinity)
+                .orbitalGlass(cornerRadius: 30)
+
+                HStack(spacing: 8) {
+                    Image(systemName: "scope")
+                        .foregroundStyle(orientation.isAvailable ? SkyPalette.cyan : SkyPalette.muted)
+                    if store.preferences.useCompass && orientation.isAvailable {
+                        Text("PHONE AIM  ·  AZ \(String(format: "%.0f°", displayedAimAzimuth))  EL \(String(format: "%+.0f°", correctedAimElevation))")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(SkyPalette.primary)
+                        Spacer(minLength: 4)
+                        Text(orientation.northReference)
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .foregroundStyle(SkyPalette.muted)
+                    } else if store.preferences.useCompass {
+                        Text("Phone orientation sensor unavailable")
+                            .font(.caption)
+                            .foregroundStyle(SkyPalette.muted)
+                    } else {
+                        Text("Pointing indicator disabled in Settings")
+                            .font(.caption)
+                            .foregroundStyle(SkyPalette.muted)
+                    }
                 }
-            }
-            .padding(.horizontal, 4)
-
-            HStack(spacing: 10) {
-                radarMetric("AZIMUTH", value: String(format: "%.1f°", position.azimuthDegrees))
-                radarMetric("ELEVATION", value: String(format: "%+.1f°", position.elevationDegrees))
-                radarMetric("RANGE", value: String(format: "%.0f km", position.distanceKilometers))
-            }
-
-            Label(
-                position.isAboveHorizon ? "Satellite is above your horizon" : "Satellite is below your horizon",
-                systemImage: position.isAboveHorizon ? "dot.radiowaves.left.and.right" : "moon"
-            )
-            .font(.subheadline.weight(.medium))
-            .foregroundStyle(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.muted)
-            .padding(.horizontal, 4)
-            Text(store.preferences.useCompass && orientation.isAvailable
-                ? "Phone-relative radar; the red reticle marks where the top of your phone points."
-                : "North-up polar view; distance from the center represents elevation.")
-                .font(.caption)
-                .foregroundStyle(SkyPalette.muted)
                 .padding(.horizontal, 4)
-        } else {
-            observationEmptyState(store: store)
+
+                HStack(spacing: 10) {
+                    radarMetric("AZIMUTH", value: String(format: "%.1f°", position.azimuthDegrees))
+                    radarMetric("ELEVATION", value: String(format: "%+.1f°", position.elevationDegrees))
+                    radarMetric("RANGE", value: String(format: "%.0f km", position.distanceKilometers))
+                }
+
+                Label(
+                    position.isAboveHorizon ? "Satellite is above your horizon" : "Satellite is below your horizon",
+                    systemImage: position.isAboveHorizon ? "dot.radiowaves.left.and.right" : "moon"
+                )
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(position.isAboveHorizon ? SkyPalette.cyan : SkyPalette.muted)
+                .padding(.horizontal, 4)
+                Text(store.preferences.useCompass && orientation.isAvailable
+                    ? "Phone-relative radar; the red reticle marks where the top of your phone points."
+                    : "North-up polar view; distance from the center represents elevation.")
+                    .font(.caption)
+                    .foregroundStyle(SkyPalette.muted)
+                    .padding(.horizontal, 4)
+            } else {
+                observationEmptyState(store: store)
+            }
         }
+        .onAppear { updateOrientationUpdates() }
+        .onChange(of: store.preferences.useCompass) { _, _ in updateOrientationUpdates() }
+        .onDisappear { orientation.stop() }
     }
 
     private func updateOrientationUpdates() {
-        guard selectedPane == .radar, store.preferences.useCompass else {
+        guard store.preferences.useCompass else {
             orientation.stop()
             return
         }
@@ -164,10 +170,21 @@ struct RadarView: View {
 
 @MainActor
 private final class RadarOrientationManager: ObservableObject {
-    @Published private(set) var azimuthDegrees = 0.0
-    @Published private(set) var elevationDegrees = 0.0
-    @Published private(set) var isAvailable = false
-    @Published private(set) var northReference = "REL"
+    private struct Sample {
+        var azimuthDegrees = 0.0
+        var rotationHeadingDegrees = 0.0
+        var elevationDegrees = 0.0
+        var isAvailable = false
+        var northReference = "REL"
+    }
+
+    @Published private var sample = Sample()
+
+    var azimuthDegrees: Double { sample.azimuthDegrees }
+    var rotationHeadingDegrees: Double { sample.rotationHeadingDegrees }
+    var elevationDegrees: Double { sample.elevationDegrees }
+    var isAvailable: Bool { sample.isAvailable }
+    var northReference: String { sample.northReference }
 
     private let motionManager = CMMotionManager()
 
@@ -177,45 +194,46 @@ private final class RadarOrientationManager: ObservableObject {
         let referenceFrame: CMAttitudeReferenceFrame
         if availableFrames.contains(.xTrueNorthZVertical) {
             referenceFrame = .xTrueNorthZVertical
-            northReference = "TRUE N"
+            sample.northReference = "TRUE N"
         } else if availableFrames.contains(.xMagneticNorthZVertical) {
             referenceFrame = .xMagneticNorthZVertical
-            northReference = "MAG N"
+            sample.northReference = "MAG N"
         } else if availableFrames.contains(.xArbitraryCorrectedZVertical) {
             referenceFrame = .xArbitraryCorrectedZVertical
-            northReference = "REL"
+            sample.northReference = "REL"
         } else {
             return
         }
 
-        motionManager.deviceMotionUpdateInterval = 1.0 / 15.0
+        motionManager.deviceMotionUpdateInterval = 1.0 / 20.0
         motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
-            guard error == nil, let attitude = motion?.attitude, let self else { return }
-            let matrix = attitude.rotationMatrix
-            // The phone's long edge is its local Y axis. Project it onto north/east/up
-            // to track the direction the top of the phone is pointing, not just yaw.
-            let north = Double(matrix.m12)
-            let east = -Double(matrix.m22)
-            let up = min(1, max(-1, Double(matrix.m32)))
-            var azimuth = atan2(east, north) * 180 / .pi
+            guard error == nil, let attitude = motion?.attitude else { return }
+            // Core Motion's positive yaw turns opposite the radar's clockwise azimuth
+            // convention: north/south match, but east/west are reversed without this sign.
+            var azimuth = -attitude.yaw * 180 / .pi
             if azimuth < 0 { azimuth += 360 }
-            let elevation = asin(up) * 180 / .pi
+            let elevation = attitude.pitch * 180 / .pi
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                if !self.isAvailable {
-                    self.azimuthDegrees = azimuth
-                    self.elevationDegrees = elevation
+                var updated = self.sample
+                if !updated.isAvailable {
+                    updated.azimuthDegrees = azimuth
+                    updated.rotationHeadingDegrees = azimuth
+                    updated.elevationDegrees = elevation
                 } else {
-                    let delta = (azimuth - self.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
-                    if abs(delta) >= 0.2 {
-                        self.azimuthDegrees = (self.azimuthDegrees + delta * 0.35 + 360).truncatingRemainder(dividingBy: 360)
+                    let delta = (azimuth - updated.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
+                    if abs(delta) >= 0.1 {
+                        let movement = delta * 0.8
+                        updated.rotationHeadingDegrees += movement
+                        updated.azimuthDegrees = (updated.azimuthDegrees + movement + 360).truncatingRemainder(dividingBy: 360)
                     }
-                    let elevationDelta = elevation - self.elevationDegrees
-                    if abs(elevationDelta) >= 0.2 {
-                        self.elevationDegrees += elevationDelta * 0.35
+                    let elevationDelta = elevation - updated.elevationDegrees
+                    if abs(elevationDelta) >= 0.1 {
+                        updated.elevationDegrees += elevationDelta * 0.8
                     }
                 }
-                self.isAvailable = true
+                updated.isAvailable = true
+                self.sample = updated
             }
         }
     }
@@ -224,7 +242,7 @@ private final class RadarOrientationManager: ObservableObject {
         if motionManager.isDeviceMotionActive {
             motionManager.stopDeviceMotionUpdates()
         }
-        isAvailable = false
+        sample.isAvailable = false
     }
 }
 
@@ -1528,25 +1546,22 @@ private struct PolarRadarPlot: View {
                     axes.addLine(to: CGPoint(x: center.x, y: center.y + radius))
                     context.stroke(axes, with: .color(SkyPalette.primary.opacity(0.2)), lineWidth: 1)
 
-                    if trajectory.count > 1 {
-                        var path = Path()
-                        for (index, point) in trajectory.enumerated() {
-                            let projected = radarPoint(point, center: center, radius: radius)
-                            if index == 0 { path.move(to: projected) } else { path.addLine(to: projected) }
-                        }
+                    for path in visibleTrackPaths(trajectory, center: center, radius: radius) {
                         context.stroke(path, with: .color(SkyPalette.violet.opacity(0.75)), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                     }
 
-                    let satellitePoint = radarPoint(position, center: center, radius: radius)
-                    let dotRadius: CGFloat = 7
-                    let dot = Path(ellipseIn: CGRect(
-                        x: satellitePoint.x - dotRadius,
-                        y: satellitePoint.y - dotRadius,
-                        width: dotRadius * 2,
-                        height: dotRadius * 2
-                    ))
-                    context.fill(dot, with: .color(position.isAboveHorizon ? SkyPalette.cyan : .orange))
-                    context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
+                    if position.elevationDegrees > 0 {
+                        let satellitePoint = radarPoint(position, center: center, radius: radius)
+                        let dotRadius: CGFloat = 7
+                        let dot = Path(ellipseIn: CGRect(
+                            x: satellitePoint.x - dotRadius,
+                            y: satellitePoint.y - dotRadius,
+                            width: dotRadius * 2,
+                            height: dotRadius * 2
+                        ))
+                        context.fill(dot, with: .color(SkyPalette.cyan))
+                        context.stroke(dot, with: .color(SkyPalette.primary), lineWidth: 1.5)
+                    }
 
                     if showsPointingMarker {
                         let aim = radarPoint(
@@ -1580,6 +1595,7 @@ private struct PolarRadarPlot: View {
             .foregroundStyle(SkyPalette.muted)
         }
         .rotationEffect(.degrees(rotationDegrees))
+        .animation(.linear(duration: 1.0 / 20.0), value: rotationDegrees)
         .aspectRatio(1, contentMode: .fit)
         .padding(12)
     }
@@ -1591,6 +1607,62 @@ private struct PolarRadarPlot: View {
             center: center,
             radius: radius
         )
+    }
+
+    private func visibleTrackPaths(_ points: [TrackedPosition], center: CGPoint, radius: CGFloat) -> [Path] {
+        guard points.count > 1 else { return [] }
+        var paths: [Path] = []
+        var path = Path()
+        var isDrawing = false
+
+        for index in 1..<points.count {
+            let previous = points[index - 1]
+            let current = points[index]
+            let previousVisible = previous.elevationDegrees > 0
+            let currentVisible = current.elevationDegrees > 0
+
+            switch (previousVisible, currentVisible) {
+            case (true, true):
+                if !isDrawing {
+                    path = Path()
+                    path.move(to: radarPoint(previous, center: center, radius: radius))
+                    isDrawing = true
+                }
+                path.addLine(to: radarPoint(current, center: center, radius: radius))
+            case (false, true):
+                path = Path()
+                path.move(to: horizonPoint(previous, current, center: center, radius: radius))
+                path.addLine(to: radarPoint(current, center: center, radius: radius))
+                isDrawing = true
+            case (true, false):
+                if isDrawing {
+                    path.addLine(to: horizonPoint(previous, current, center: center, radius: radius))
+                    paths.append(path)
+                    path = Path()
+                    isDrawing = false
+                }
+            case (false, false):
+                break
+            }
+        }
+
+        if isDrawing { paths.append(path) }
+        return paths
+    }
+
+    private func horizonPoint(
+        _ first: TrackedPosition,
+        _ second: TrackedPosition,
+        center: CGPoint,
+        radius: CGFloat
+    ) -> CGPoint {
+        let denominator = first.elevationDegrees - second.elevationDegrees
+        let fraction = denominator == 0 ? 0 : first.elevationDegrees / denominator
+        var azimuthDelta = (second.azimuthDegrees - first.azimuthDegrees + 540).truncatingRemainder(dividingBy: 360) - 180
+        azimuthDelta = min(180, max(-180, azimuthDelta))
+        let azimuth = (first.azimuthDegrees + azimuthDelta * fraction + 360)
+            .truncatingRemainder(dividingBy: 360)
+        return radarPoint(azimuth: azimuth, elevation: 0, center: center, radius: radius)
     }
 
     private func radarPoint(azimuth: Double, elevation: Double, center: CGPoint, radius: CGFloat) -> CGPoint {
@@ -1607,45 +1679,37 @@ private struct PolarRadarPlot: View {
 private struct RadarSweepOverlay: View {
     var body: some View {
         GeometryReader { geometry in
-            TimelineView(.animation(minimumInterval: 1.0 / 24.0)) { timeline in
-                Canvas { context, size in
-                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
-                    let radius = min(size.width, size.height) * 0.405
-                    let head = (timeline.date.timeIntervalSinceReferenceDate * 45).truncatingRemainder(dividingBy: 360) - 90
-                    let trailDegrees = 78.0
-                    let sliceCount = 24
+            let radius = min(geometry.size.width, geometry.size.height) * 0.405
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+                let angle = (timeline.date.timeIntervalSinceReferenceDate * 45).truncatingRemainder(dividingBy: 360)
+                ZStack {
+                    Circle()
+                        .fill(
+                            AngularGradient(
+                                gradient: Gradient(stops: [
+                                    .init(color: .clear, location: 0),
+                                    .init(color: .clear, location: 0.77),
+                                    .init(color: SkyPalette.cyan.opacity(0.015), location: 0.80),
+                                    .init(color: SkyPalette.cyan.opacity(0.08), location: 0.91),
+                                    .init(color: SkyPalette.cyan.opacity(0.28), location: 0.995),
+                                    .init(color: .clear, location: 1)
+                                ]),
+                                center: .center,
+                                startAngle: .degrees(-90),
+                                endAngle: .degrees(270)
+                            )
+                        )
+                        .frame(width: radius * 2, height: radius * 2)
+                        .rotationEffect(.degrees(angle))
 
-                    for slice in 0..<sliceCount {
-                        let start = head - trailDegrees * Double(slice) / Double(sliceCount)
-                        let end = head - trailDegrees * Double(slice + 1) / Double(sliceCount)
-                        let startRadians = start * .pi / 180
-                        let endRadians = end * .pi / 180
-                        var wedge = Path()
-                        wedge.move(to: center)
-                        wedge.addLine(to: CGPoint(
-                            x: center.x + cos(startRadians) * radius,
-                            y: center.y + sin(startRadians) * radius
-                        ))
-                        wedge.addLine(to: CGPoint(
-                            x: center.x + cos(endRadians) * radius,
-                            y: center.y + sin(endRadians) * radius
-                        ))
-                        wedge.closeSubpath()
-                        let fade = 0.32 * pow(1 - Double(slice) / Double(sliceCount), 1.8)
-                        context.fill(wedge, with: .color(SkyPalette.cyan.opacity(fade)))
-                    }
-
-                    let headRadians = head * .pi / 180
-                    var beam = Path()
-                    beam.move(to: center)
-                    beam.addLine(to: CGPoint(
-                        x: center.x + cos(headRadians) * radius,
-                        y: center.y + sin(headRadians) * radius
-                    ))
-                    context.stroke(beam, with: .color(SkyPalette.cyan.opacity(0.28)), lineWidth: 4)
-                    context.stroke(beam, with: .color(SkyPalette.cyan), lineWidth: 1.4)
+                    Rectangle()
+                        .fill(SkyPalette.cyan.opacity(0.92))
+                        .frame(width: 1.5, height: radius)
+                        .offset(y: -radius / 2)
+                        .shadow(color: SkyPalette.cyan.opacity(0.7), radius: 2)
+                        .rotationEffect(.degrees(angle))
                 }
-                .frame(width: geometry.size.width, height: geometry.size.height)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .allowsHitTesting(false)
