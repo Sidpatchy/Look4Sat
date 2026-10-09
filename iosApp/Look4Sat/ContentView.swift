@@ -5,30 +5,24 @@ import UIKit
 import UniformTypeIdentifiers
 
 enum SkyPalette {
-    static let ink = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.025, green: 0.035, blue: 0.09, alpha: 1)
-            : UIColor(red: 0.94, green: 0.96, blue: 0.99, alpha: 1)
-    })
+    static let ink = Color(uiColor: .systemBackground)
     static let primary = Color(uiColor: .label)
-    static let violet = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.62, green: 0.56, blue: 1.0, alpha: 1)
-            : UIColor(red: 0.34, green: 0.25, blue: 0.78, alpha: 1)
-    })
-    static let cyan = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.32, green: 0.88, blue: 0.95, alpha: 1)
-            : UIColor(red: 0.0, green: 0.40, blue: 0.50, alpha: 1)
-    })
+    static let violet = Color(uiColor: .tertiaryLabel)
+    static let cyan = Color(uiColor: .systemTeal)
     static let muted = Color(uiColor: .secondaryLabel)
 
     static func elevationColor(_ elevation: Double, low: Double, high: Double) -> Color {
         let lowThreshold = min(low, high)
         let highThreshold = max(low, high)
-        if elevation < lowThreshold { return Color(red: 0.94, green: 0.33, blue: 0.31) }
-        if elevation < highThreshold { return Color(red: 1.0, green: 0.76, blue: 0.03) }
-        return Color(red: 0.30, green: 0.69, blue: 0.32)
+        if elevation < lowThreshold { return Color(uiColor: .systemRed) }
+        if elevation < highThreshold {
+            return Color(uiColor: UIColor { traits in
+                traits.userInterfaceStyle == .dark
+                    ? UIColor(red: 1.0, green: 0.78, blue: 0.20, alpha: 1)
+                    : UIColor(red: 0.62, green: 0.42, blue: 0.00, alpha: 1)
+            })
+        }
+        return Color(uiColor: .systemGreen)
     }
 }
 
@@ -863,19 +857,19 @@ private struct Starfield: View {
             ZStack {
                 LinearGradient(
                     colors: colorScheme == .dark
-                        ? [Color(red: 0.035, green: 0.05, blue: 0.14), SkyPalette.ink, Color(red: 0.075, green: 0.045, blue: 0.16)]
-                        : [Color(red: 0.98, green: 0.99, blue: 1), SkyPalette.ink, Color(red: 0.94, green: 0.93, blue: 1)],
+                        ? [SkyPalette.ink, Color(uiColor: .secondarySystemBackground), SkyPalette.ink]
+                        : [Color(uiColor: .systemGroupedBackground), SkyPalette.ink, Color(uiColor: .secondarySystemGroupedBackground)],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
                 )
-                RadialGradient(colors: [SkyPalette.violet.opacity(0.15), .clear], center: .topTrailing, startRadius: 20, endRadius: geometry.size.width * 0.85)
+                RadialGradient(colors: [SkyPalette.cyan.opacity(0.045), .clear], center: .topTrailing, startRadius: 20, endRadius: geometry.size.width * 0.85)
                 Canvas { context, size in
-                    for index in 0..<110 {
+                    for index in 0..<70 {
                         let x = CGFloat((index * 73 + 19) % 997) / 997 * size.width
                         let y = CGFloat((index * 137 + 43) % 991) / 991 * size.height
-                        let diameter: CGFloat = index.isMultiple(of: 9) ? 2.1 : 1.2
+                        let diameter: CGFloat = index.isMultiple(of: 9) ? 1.6 : 0.9
                         let star = Path(ellipseIn: CGRect(x: x, y: y, width: diameter, height: diameter))
-                        context.fill(star, with: .color(SkyPalette.primary.opacity(index.isMultiple(of: 5) ? 0.42 : 0.16)))
+                        context.fill(star, with: .color(SkyPalette.primary.opacity(index.isMultiple(of: 5) ? 0.24 : 0.08)))
                     }
                 }
             }

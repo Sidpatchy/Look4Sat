@@ -8,11 +8,12 @@ struct Look4SatApp: App {
         WindowGroup {
             ContentView(store: store)
                 .preferredColorScheme(store.preferences.lightTheme ? .light : .dark)
-                .overlay {
-                    if store.preferences.nightMode && !store.preferences.lightTheme {
-                        Color.red.opacity(0.22).blendMode(.screen).ignoresSafeArea().allowsHitTesting(false)
-                    }
-                }
+                .compositingGroup()
+                .colorMultiply(
+                    store.preferences.nightMode && !store.preferences.lightTheme
+                        ? Color(red: 1, green: 0, blue: 0)
+                        : .white
+                )
                 .task {
                     await store.start()
                     while !Task.isCancelled {
