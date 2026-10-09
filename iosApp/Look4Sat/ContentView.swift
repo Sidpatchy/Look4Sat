@@ -1,4 +1,5 @@
 import Foundation
+import Look4SatShared
 import SwiftUI
 
 private enum SkyPalette {

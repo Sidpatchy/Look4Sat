@@ -44,7 +44,7 @@ struct PassItem: Identifiable {
 }
 
 @MainActor
-final class SatelliteStore: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published private(set) var satellites: [SatelliteTarget] = []
     @Published private(set) var passes: [PassItem] = []
     @Published private(set) var positions: [Int32: TrackedPosition] = [:]
