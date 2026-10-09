@@ -1515,7 +1515,10 @@ struct AmsatStatusView: View {
                     .padding(.bottom, 20)
                 }
                 .scrollIndicators(.hidden)
-                .refreshable { await store.refreshAmsatStatus() }
+                .refreshable {
+                    let refreshTask = Task { await store.refreshAmsatStatus() }
+                    await refreshTask.value
+                }
             }
         }
         .padding(.horizontal, 18)
