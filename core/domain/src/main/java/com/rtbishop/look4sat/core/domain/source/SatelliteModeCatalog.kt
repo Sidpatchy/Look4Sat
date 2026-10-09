@@ -17,20 +17,15 @@
  */
 package com.rtbishop.look4sat.core.domain.source
 
-object Sources {
-    // Ordered from the most specific to the most generic source: the first source that knows a
-    // satellite gets to name it, with the full catalog acting as the fallback.
-    val satelliteDataUrls = listOf(
-        "live.ariss.org/iss.txt",
-        "r4uab.ru/satonline.txt",
-        "mmccants.org/tles/classfd.zip",
-        "amsat.org/tle/current/nasabare.txt",
-        "celestrak.org/NORAD/elements/gp.php?GROUP=active&FORMAT=csv",
-        "db.satnogs.org/api/tle/?format=3le"
+/** Shared mode names used by the satellite filter UI on Android and iOS. */
+object SatelliteModeCatalog {
+    val modes = listOf(
+        "4FSK", "64-QAM", "AFSK", "AFSK TUBiX10", "AHRPT", "AM", "APT", "ASK", "BPSK",
+        "BPSK PMT-A3", "CERTO", "CW", "DATV", "DBPSK", "DOKA", "DPSK", "DQPSK", "DSB", "DSTAR",
+        "DUV", "DVB-S2", "FFSK", "FM", "FMN", "FSK", "FSK AX.100 Mode 5", "FSK AX.100 Mode 6",
+        "FSK AX.25 G3RUH", "FT8", "GENESIS FSK", "GFSK", "GFSK Pkst", "GFSK Rktr", "GFSK/BPSK",
+        "GMSK", "GMSK USP", "HRPT", "LoRa", "LRPT", "LSB", "MFSK", "MSK", "MSK AX.100 Mode 5",
+        "MSK AX.100 Mode 6", "OFDM", "OQPSK", "PPM", "PSK", "PSK31", "PSK63", "QPSK", "QPSK31",
+        "QPSK63", "SIDLOC", "SQPSK", "SSDV", "SSTV", "UNKNOWN", "USB", "WSJT"
     )
-    val transceiversDataUrls = listOf(
-        "r4uab.ru/transmitters.json",
-        "db.satnogs.org/api/transmitters/?format=json&status=active"
-    )
-    val satelliteModes = SatelliteModeCatalog.modes
 }

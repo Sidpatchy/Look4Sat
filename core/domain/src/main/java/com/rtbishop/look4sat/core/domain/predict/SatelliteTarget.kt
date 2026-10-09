@@ -26,6 +26,7 @@ class SatelliteTarget internal constructor(private val data: OrbitalData) {
     val catalogNumber: Int get() = data.catnum
     val isDeepSpace: Boolean get() = data.isDeepSpace
     val orbitalPeriodMinutes: Double get() = data.orbitalPeriod
+    val elementEpochDaynum: Double get() = data.epochDaynum
 
     fun currentPosition(
         latitude: Double,
@@ -45,6 +46,7 @@ class SatelliteTarget internal constructor(private val data: OrbitalData) {
             },
             altitudeKilometers = position.altitude,
             distanceKilometers = position.distance,
+            distanceRateKilometersPerSecond = position.distanceRate,
             isAboveHorizon = position.aboveHorizon
         )
     }
@@ -151,8 +153,15 @@ data class SatellitePosition(
     val longitudeDegrees: Double,
     val altitudeKilometers: Double,
     val distanceKilometers: Double,
+    val distanceRateKilometersPerSecond: Double,
     val isAboveHorizon: Boolean
-)
+) {
+    fun downlinkFrequency(frequencyHz: Long): Long =
+        (frequencyHz.toDouble() * (SPEED_OF_LIGHT - distanceRateKilometersPerSecond * 1000.0) / SPEED_OF_LIGHT).toLong()
+
+    fun uplinkFrequency(frequencyHz: Long): Long =
+        (frequencyHz.toDouble() * (SPEED_OF_LIGHT + distanceRateKilometersPerSecond * 1000.0) / SPEED_OF_LIGHT).toLong()
+}
 
 data class SatellitePass(
     val aosTimeMillis: Long,

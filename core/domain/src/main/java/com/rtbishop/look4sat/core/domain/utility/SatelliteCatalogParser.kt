@@ -25,4 +25,7 @@ class SatelliteCatalogParser {
 
     fun parseCatalog(csv: String): List<SatelliteTarget> =
         parser.parseCatalog(csv).map(::SatelliteTarget)
+
+    fun parseTLE(tle: String): List<SatelliteTarget> =
+        parser.parseTLE(tle).map(::SatelliteTarget)
 }
