@@ -44,3 +44,30 @@ jobs:
           name: Look4Sat-iOS-Simulator
           path: build/ios/Build/Products/Debug-iphonesimulator/Look4Sat.app
           if-no-files-found: error
+
+      - name: Stop Gradle before device build
+        run: ./gradlew --stop
+
+      - name: Build iOS device app unsigned
+        run: >-
+          xcodebuild
+          -project iosApp/Look4Sat.xcodeproj
+          -scheme Look4Sat
+          -configuration Debug
+          -destination 'generic/platform=iOS'
+          -derivedDataPath build/ios-device
+          CODE_SIGNING_ALLOWED=NO
+          build
+
+      - name: Package unsigned IPA for AltStore
+        run: |
+          mkdir -p build/ipa/Payload
+          ditto build/ios-device/Build/Products/Debug-iphoneos/Look4Sat.app build/ipa/Payload/Look4Sat.app
+          ditto -c -k --sequesterRsrc --keepParent build/ipa/Payload build/ipa/Look4Sat-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v5
+        with:
+          name: Look4Sat-iOS-Unsigned-IPA
+          path: build/ipa/Look4Sat-unsigned.ipa
+          if-no-files-found: error
