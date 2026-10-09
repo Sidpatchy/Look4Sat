@@ -81,7 +81,11 @@ struct PassItem: Identifiable {
     let satellite: SatelliteTarget
     let prediction: PredictedPass
 
-    var id: String { "\(satellite.catalogNumber):\(prediction.aosTimeMillis)" }
+    var id: String {
+        satellite.isDeepSpace
+            ? "\(satellite.catalogNumber):deep-space"
+            : "\(satellite.catalogNumber):\(prediction.aosTimeMillis)"
+    }
 }
 
 struct PassGroup: Identifiable {
@@ -370,7 +374,16 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         return passes.filter { matchesSatellite($0.satellite, query: query) }
     }
 
+    var visibleScheduledPasses: [PassItem] {
+        visiblePasses.filter { !$0.satellite.isDeepSpace }
+    }
+
+    var visibleDeepSpaceObjects: [PassItem] {
+        visiblePasses.filter { $0.satellite.isDeepSpace }
+    }
+
     func relevantPass(for satelliteID: Int32) -> PassItem? {
+        guard satellite(withID: satelliteID)?.isDeepSpace != true else { return nil }
         let now = Int64(Date().timeIntervalSince1970 * 1000)
         let satellitePasses = passes.filter { $0.satellite.catalogNumber == satelliteID }
         return satellitePasses.first {
@@ -569,7 +582,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     }
 
     var remainingPassGroups: [PassGroup] {
-        let remaining = Array(visiblePasses.dropFirst())
+        let remaining = Array(visibleScheduledPasses.dropFirst())
         let formatter = DateFormatter()
         formatter.dateStyle = .full
         formatter.timeStyle = .none

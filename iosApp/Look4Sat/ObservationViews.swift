@@ -216,35 +216,55 @@ private struct RadarPassTimer: View {
     let satelliteID: Int32
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { timeline in
-            let now = Int64(timeline.date.timeIntervalSince1970 * 1000)
-            let satellitePasses = store.passes.filter { $0.satellite.catalogNumber == satelliteID }
-            let currentPass = satellitePasses.first {
-                $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
-            }
-            let nextPass = satellitePasses.first { $0.prediction.aosTimeMillis > now }
-            let active = currentPass != nil
-            let pass = currentPass ?? nextPass
-
+        if store.satellite(withID: satelliteID)?.isDeepSpace == true {
             HStack(spacing: 12) {
-                timerEndpoint("AOS", millis: pass?.prediction.aosTimeMillis, emphasized: !active)
-                Spacer(minLength: 4)
-                VStack(spacing: 2) {
-                    Text(active ? "TIME TO LOS" : "TIME TO AOS")
+                Image(systemName: "globe.americas.fill")
+                    .foregroundStyle(SkyPalette.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("DEEP SPACE OBJECT")
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(1)
                         .foregroundStyle(SkyPalette.accent)
-                    Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
-                        .font(.system(size: 20, weight: .bold, design: .monospaced))
-                        .monospacedDigit()
+                    Text("No AOS/LOS pass cycle")
+                        .font(.system(size: 12, weight: .medium, design: .rounded))
                         .foregroundStyle(SkyPalette.primary)
                 }
-                Spacer(minLength: 4)
-                timerEndpoint("LOS", millis: pass?.prediction.losTimeMillis, emphasized: active)
+                Spacer()
             }
             .padding(.horizontal, 15)
             .padding(.vertical, 11)
             .orbitalGlass(cornerRadius: 18)
+        } else {
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                let now = Int64(timeline.date.timeIntervalSince1970 * 1000)
+                let satellitePasses = store.passes.filter { $0.satellite.catalogNumber == satelliteID }
+                let currentPass = satellitePasses.first {
+                    $0.prediction.aosTimeMillis <= now && $0.prediction.losTimeMillis > now
+                }
+                let nextPass = satellitePasses.first { $0.prediction.aosTimeMillis > now }
+                let active = currentPass != nil
+                let pass = currentPass ?? nextPass
+
+                HStack(spacing: 12) {
+                    timerEndpoint("AOS", millis: pass?.prediction.aosTimeMillis, emphasized: !active)
+                    Spacer(minLength: 4)
+                    VStack(spacing: 2) {
+                        Text(active ? "TIME TO LOS" : "TIME TO AOS")
+                            .font(.system(size: 9, weight: .bold, design: .rounded))
+                            .tracking(1)
+                            .foregroundStyle(SkyPalette.accent)
+                        Text(pass.map { countdown(until: active ? $0.prediction.losTimeMillis : $0.prediction.aosTimeMillis, now: now) } ?? "—")
+                            .font(.system(size: 20, weight: .bold, design: .monospaced))
+                            .monospacedDigit()
+                            .foregroundStyle(SkyPalette.primary)
+                    }
+                    Spacer(minLength: 4)
+                    timerEndpoint("LOS", millis: pass?.prediction.losTimeMillis, emphasized: active)
+                }
+                .padding(.horizontal, 15)
+                .padding(.vertical, 11)
+                .orbitalGlass(cornerRadius: 18)
+            }
         }
     }
 

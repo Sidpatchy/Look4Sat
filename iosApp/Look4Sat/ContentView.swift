@@ -173,9 +173,23 @@ private struct PassesView: View {
                 passSearchAndFilters
                 if store.observerLocation == nil {
                     locationPrompt
-                } else if let next = store.visiblePasses.first {
-                    Button { onSelectSatellite(next.satellite) } label: { featuredPass(next) }
-                        .buttonStyle(.plain)
+                } else {
+                    if let next = store.visibleScheduledPasses.first {
+                        Button { onSelectSatellite(next.satellite) } label: { featuredPass(next) }
+                            .buttonStyle(.plain)
+                    }
+                    if !store.visibleDeepSpaceObjects.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            sectionTitle(
+                                "DEEP SPACE OBJECTS",
+                                detail: "Orbital period ≥225 min · \(store.visibleDeepSpaceObjects.count) entries"
+                            )
+                            ForEach(store.visibleDeepSpaceObjects) { item in
+                                Button { onSelectSatellite(item.satellite) } label: { deepSpaceRow(item) }
+                                    .buttonStyle(.plain)
+                            }
+                        }
+                    }
                     if !store.remainingPassGroups.isEmpty {
                         VStack(alignment: .leading, spacing: 12) {
                             ForEach(store.remainingPassGroups) { group in
@@ -188,14 +202,17 @@ private struct PassesView: View {
                             }
                         }
                     }
-                } else if store.isLoading {
-                    emptyCard("Finding satellites", detail: "Calculating their next passes over your location.", icon: "dot.radiowaves.left.and.right")
-                } else if !store.passSearchText.isEmpty {
-                    emptyCard("No matching passes", detail: "Try another satellite name or NORAD catalog number.", icon: "magnifyingglass")
-                } else {
-                    emptyCard("No passes found", detail: store.satellites.isEmpty
-                        ? "Download orbital data to start tracking satellites."
-                        : "Try adjusting filters or tracking more satellites.", icon: "moon.stars")
+                    if store.visibleScheduledPasses.isEmpty && store.visibleDeepSpaceObjects.isEmpty {
+                        if store.isLoading {
+                            emptyCard("Finding satellites", detail: "Calculating their next passes over your location.", icon: "dot.radiowaves.left.and.right")
+                        } else if !store.passSearchText.isEmpty {
+                            emptyCard("No matching passes", detail: "Try another satellite name or NORAD catalog number.", icon: "magnifyingglass")
+                        } else {
+                            emptyCard("No passes found", detail: store.satellites.isEmpty
+                                ? "Download orbital data to start tracking satellites."
+                                : "Try adjusting filters or tracking more satellites.", icon: "moon.stars")
+                        }
+                    }
                 }
                 if let message = store.statusMessage {
                     Label(message, systemImage: "info.circle")
@@ -409,6 +426,37 @@ private struct PassesView: View {
             Text(time)
                 .font(.system(.caption, design: .monospaced).weight(.medium))
                 .foregroundStyle(SkyPalette.accent)
+        }
+        .padding(15)
+        .orbitalGlass(cornerRadius: 20)
+    }
+
+    private func deepSpaceRow(_ item: PassItem) -> some View {
+        let position = store.position(for: item.satellite)
+        let azimuth = position?.azimuthDegrees ?? item.prediction.aosAzimuthDegrees
+        let elevation = position?.elevationDegrees ?? item.prediction.maximumElevationDegrees
+        return HStack(spacing: 14) {
+            ZStack {
+                Circle().fill(SkyPalette.accent.opacity(0.16)).frame(width: 42, height: 42)
+                Image(systemName: "globe.americas.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(SkyPalette.accent)
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(item.satellite.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(SkyPalette.primary)
+                    .lineLimit(1)
+                Text("NORAD \(item.satellite.catalogNumber) · \(Int(item.satellite.orbitalPeriodMinutes.rounded())) min orbit")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundStyle(SkyPalette.muted)
+                    .lineLimit(1)
+                Text("AZ \(String(format: "%.0f°", azimuth)) · EL \(String(format: "%+.0f°", elevation))")
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundStyle(elevationColor(elevation))
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
         }
         .padding(15)
         .orbitalGlass(cornerRadius: 20)
