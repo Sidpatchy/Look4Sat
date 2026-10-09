@@ -104,6 +104,7 @@ struct ContentView: View {
 
     private func selectSatellite(_ satellite: SatelliteTarget) {
         if !store.isSelected(satellite) { store.toggle(satellite) }
+        store.focusSatellite(satellite.catalogNumber)
         selectedSatelliteID = satellite.catalogNumber
     }
 

@@ -264,7 +264,7 @@ private struct RadarPassTimer: View {
 
 @MainActor
 private final class RadarOrientationManager: ObservableObject {
-    private struct Sample {
+    private struct Sample: Equatable {
         var azimuthDegrees = 0.0
         var rotationHeadingDegrees = 0.0
         var elevationDegrees = 0.0
@@ -312,7 +312,7 @@ private final class RadarOrientationManager: ObservableObject {
             return
         }
 
-        motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
+        motionManager.deviceMotionUpdateInterval = 1.0 / 120.0
         let aimWithBack = useBackSideAsAim
         motionManager.startDeviceMotionUpdates(using: referenceFrame, to: .main) { [weak self] motion, error in
             guard error == nil, let motion else { return }
@@ -333,8 +333,8 @@ private final class RadarOrientationManager: ObservableObject {
                 self.recentElevations.append(elevation)
                 if self.recentAzimuths.count > 5 { self.recentAzimuths.removeFirst() }
                 if self.recentElevations.count > 5 { self.recentElevations.removeFirst() }
-                let filteredAzimuth = Self.circularMean(self.recentAzimuths)
-                let filteredElevation = self.recentElevations.reduce(0, +) / Double(self.recentElevations.count)
+                let filteredAzimuth = (Self.circularMean(self.recentAzimuths) * 10).rounded() / 10
+                let filteredElevation = (self.recentElevations.reduce(0, +) / Double(self.recentElevations.count) * 10).rounded() / 10
                 var updated = self.sample
                 if !updated.isAvailable {
                     updated.azimuthDegrees = filteredAzimuth
@@ -353,7 +353,7 @@ private final class RadarOrientationManager: ObservableObject {
                 }
                 updated.shouldWarnCalibration = calibrationWarning && updated.northReference != "REL"
                 updated.isAvailable = true
-                self.sample = updated
+                if updated != self.sample { self.sample = updated }
             }
         }
     }
@@ -1976,7 +1976,7 @@ private struct PolarRadarPlot: View {
                 .font(.system(size: 11, weight: .bold, design: .rounded))
                 .foregroundStyle(SkyPalette.muted)
                 .rotationEffect(.degrees(rotationDegrees))
-                .animation(.linear(duration: 1.0 / 60.0), value: rotationDegrees)
+        .animation(.linear(duration: 1.0 / 120.0), value: rotationDegrees)
 
                 if showsPointingMarker {
                     let magnitude = min(90, abs(pointingElevationDegrees))
@@ -2087,7 +2087,7 @@ private struct RadarSweepOverlay: View {
     var body: some View {
         GeometryReader { geometry in
             let radius = min(geometry.size.width, geometry.size.height) * 0.405
-            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { timeline in
+            TimelineView(.animation(minimumInterval: 1.0 / 120.0)) { timeline in
                 let angle = (timeline.date.timeIntervalSinceReferenceDate * 45).truncatingRemainder(dividingBy: 360)
                 ZStack {
                     Circle()

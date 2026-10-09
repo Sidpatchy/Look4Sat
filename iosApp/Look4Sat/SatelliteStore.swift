@@ -288,6 +288,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     @Published private(set) var amsatUploadMessage: String?
     @Published private(set) var amsatUploadError: String?
     @Published var searchText = ""
+    @Published private(set) var focusedSatelliteID: Int32 = 25544
     @Published private(set) var manualLocation: CLLocation? = SatelliteStore.loadManualLocation()
     @Published var selectedIDs: Set<Int32> = {
         let saved = (UserDefaults.standard.array(forKey: "trackedSatelliteIDs") as? [NSNumber])?.map(\.int32Value)
@@ -531,6 +532,10 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         selectedIDs.contains(satellite.catalogNumber)
     }
 
+    func focusSatellite(_ catalogNumber: Int32) {
+        focusedSatelliteID = catalogNumber
+    }
+
     func selectTransponder(_ uuid: String?) {
         selectedTransponderUUID = uuid
     }
@@ -573,6 +578,37 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         let visibleIDs = Set(filterBySelectedModes(satellites).filter { matchesSatellite($0, query: query) }.map(\.catalogNumber))
         selectedIDs.subtract(visibleIDs)
         Task { await recalculatePasses() }
+    }
+
+    /// Refresh the active radar/map target each second without searching passes for the whole catalog.
+    func updateFocusedPosition() async {
+        guard let location = observerLocation,
+              let satellite = satellite(withID: focusedSatelliteID) else { return }
+        let input = PredictionInput(satellite: satellite)
+        let latitude = location.coordinate.latitude
+        let longitude = location.coordinate.longitude
+        let altitude = location.altitude
+        let timeMillis = Int64(Date().timeIntervalSince1970 * 1000)
+        let update = await Task.detached(priority: .userInitiated) {
+            let position = input.satellite.currentPosition(
+                latitude: latitude,
+                longitude: longitude,
+                altitudeMeters: altitude,
+                timeMillis: timeMillis
+            )
+            return TrackedPosition(
+                timeMillis: timeMillis,
+                azimuthDegrees: position.azimuthDegrees,
+                elevationDegrees: position.elevationDegrees,
+                latitudeDegrees: position.latitudeDegrees,
+                longitudeDegrees: position.longitudeDegrees,
+                altitudeKilometers: position.altitudeKilometers,
+                distanceKilometers: position.distanceKilometers,
+                distanceRateKilometersPerSecond: position.distanceRateKilometersPerSecond,
+                isAboveHorizon: position.isAboveHorizon
+            )
+        }.value
+        positions[focusedSatelliteID] = update
     }
 
     func recalculatePasses() async {

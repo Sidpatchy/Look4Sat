@@ -16,10 +16,16 @@ struct Look4SatApp: App {
                 )
                 .task {
                     await store.start()
+                    var elapsedSeconds = 0
                     while !Task.isCancelled {
-                        try? await Task.sleep(for: .seconds(60))
+                        try? await Task.sleep(for: .seconds(1))
                         guard !Task.isCancelled else { break }
-                        await store.recalculatePasses()
+                        elapsedSeconds += 1
+                        if elapsedSeconds.isMultiple(of: 60) {
+                            await store.recalculatePasses()
+                        } else {
+                            await store.updateFocusedPosition()
+                        }
                     }
                 }
         }
