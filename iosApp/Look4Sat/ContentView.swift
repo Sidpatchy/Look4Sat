@@ -88,6 +88,7 @@ struct ContentView: View {
                 NavigationStack {
                     OrbitMapView(
                         store: store,
+                        livePosition: store.livePosition,
                         selectedSatelliteID: selectedSatelliteID,
                         onSelectSatellite: openRadar
                     )

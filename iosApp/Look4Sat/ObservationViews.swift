@@ -47,7 +47,12 @@ struct RadarView: View {
 
                 switch selectedPane {
                 case .radar:
-                    RadarDisplay(store: store, satelliteID: selectedSatelliteID, trajectory: trajectory)
+                    RadarDisplay(
+                        store: store,
+                        livePosition: store.livePosition,
+                        satelliteID: selectedSatelliteID,
+                        trajectory: trajectory
+                    )
                 case .transceivers:
                     TransceiversPanel(store: store, satelliteID: selectedSatelliteID)
                 case .calculator:
@@ -92,11 +97,15 @@ struct RadarView: View {
 
 private struct RadarDisplay: View {
     @ObservedObject var store: SatelliteStore
+    @ObservedObject var livePosition: LiveSatellitePositionStore
     let satelliteID: Int32
     let trajectory: [TrackedPosition]
     @StateObject private var orientation = RadarOrientationManager()
 
     private var position: TrackedPosition? {
+        if let reading = livePosition.reading, reading.catalogNumber == satelliteID {
+            return reading.position
+        }
         guard let satellite = store.satellite(withID: satelliteID) else { return nil }
         return store.position(for: satellite)
     }
@@ -1046,6 +1055,7 @@ private final class SstvAudioCapture: ObservableObject {
 
 struct OrbitMapView: View {
     @ObservedObject var store: SatelliteStore
+    @ObservedObject var livePosition: LiveSatellitePositionStore
     let selectedSatelliteID: Int32
     let onSelectSatellite: (SatelliteTarget) -> Void
 
@@ -1056,7 +1066,7 @@ struct OrbitMapView: View {
         ZStack(alignment: .top) {
             Map(position: $cameraPosition) {
                 if let satellite = store.satellite(withID: selectedSatelliteID),
-                   let position = store.position(for: satellite) {
+                   let position = currentPosition(for: satellite) {
                     let footprint = footprintBoundary(for: position)
                     MapPolygon(coordinates: footprint)
                         .foregroundStyle(SkyPalette.accent.opacity(0.12))
@@ -1083,7 +1093,7 @@ struct OrbitMapView: View {
                 }
 
                 ForEach(store.trackedSatellites, id: \.catalogNumber) { satellite in
-                    if let position = store.position(for: satellite) {
+                    if let position = currentPosition(for: satellite) {
                         Annotation(satellite.name, coordinate: coordinate(for: position)) {
                             Button { onSelectSatellite(satellite) } label: {
                                 Image(systemName: satellite.catalogNumber == selectedSatelliteID ? "dot.radiowaves.left.and.right" : "antenna.radiowaves.left.and.right")
@@ -1117,7 +1127,7 @@ struct OrbitMapView: View {
                 )
                 RadarPassTimer(store: store, satelliteID: selectedSatelliteID)
                 if let satellite = store.satellite(withID: selectedSatelliteID),
-                   let position = store.position(for: satellite) {
+                   let position = currentPosition(for: satellite) {
                     HStack(spacing: 8) {
                         Circle().fill(SkyPalette.accent.opacity(0.65)).frame(width: 8, height: 8)
                         Text("\(satellite.name)  ·  \(String(format: "%+.0f° elevation", position.elevationDegrees))")
@@ -1153,6 +1163,13 @@ struct OrbitMapView: View {
             endTimeMillis: now + 45 * 60_000,
             stepMillis: 90_000
         )
+    }
+
+    private func currentPosition(for satellite: SatelliteTarget) -> TrackedPosition? {
+        if let reading = livePosition.reading, reading.catalogNumber == satellite.catalogNumber {
+            return reading.position
+        }
+        return store.position(for: satellite)
     }
 
     private func footprintBoundary(for position: TrackedPosition) -> [CLLocationCoordinate2D] {

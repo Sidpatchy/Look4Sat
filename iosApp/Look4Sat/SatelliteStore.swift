@@ -30,6 +30,20 @@ struct TrackedPosition: Sendable {
     let isAboveHorizon: Bool
 }
 
+struct LiveSatelliteReading: Sendable {
+    let catalogNumber: Int32
+    let position: TrackedPosition
+}
+
+@MainActor
+final class LiveSatellitePositionStore: ObservableObject {
+    @Published private(set) var reading: LiveSatelliteReading?
+
+    func set(catalogNumber: Int32, position: TrackedPosition?) {
+        reading = position.map { LiveSatelliteReading(catalogNumber: catalogNumber, position: $0) }
+    }
+}
+
 struct IOSTransponder: Identifiable, Sendable {
     let uuid: String
     let info: String
@@ -267,6 +281,8 @@ struct IOSRadioSettings: Codable, Equatable {
 
 @MainActor
 final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
+    let livePosition = LiveSatellitePositionStore()
+
     @Published private(set) var satellites: [SatelliteTarget] = []
     @Published private(set) var passes: [PassItem] = []
     @Published private(set) var positions: [Int32: TrackedPosition] = [:]
@@ -443,6 +459,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
         selectedTransponderUUID = nil
         lastUpdated = nil
         statusMessage = nil
+        livePosition.set(catalogNumber: focusedSatelliteID, position: nil)
         [cacheURL, transceiverCacheURL].compactMap { $0 }.forEach {
             try? FileManager.default.removeItem(at: $0)
         }
@@ -534,6 +551,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
 
     func focusSatellite(_ catalogNumber: Int32) {
         focusedSatelliteID = catalogNumber
+        livePosition.set(catalogNumber: catalogNumber, position: positions[catalogNumber])
     }
 
     func selectTransponder(_ uuid: String?) {
@@ -584,6 +602,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
     func updateFocusedPosition() async {
         guard let location = observerLocation,
               let satellite = satellite(withID: focusedSatelliteID) else { return }
+        let catalogNumber = focusedSatelliteID
         let input = PredictionInput(satellite: satellite)
         let latitude = location.coordinate.latitude
         let longitude = location.coordinate.longitude
@@ -608,7 +627,8 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
                 isAboveHorizon: position.isAboveHorizon
             )
         }.value
-        positions[focusedSatelliteID] = update
+        guard focusedSatelliteID == catalogNumber else { return }
+        livePosition.set(catalogNumber: catalogNumber, position: update)
     }
 
     func recalculatePasses() async {
@@ -692,6 +712,7 @@ final class SatelliteStore: NSObject, ObservableObject, @preconcurrency CLLocati
             }
         }.value
         positions = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.catalogNumber, $0.position) })
+        livePosition.set(catalogNumber: focusedSatelliteID, position: positions[focusedSatelliteID])
         let byID = Dictionary(uniqueKeysWithValues: selected.map { ($0.catalogNumber, $0) })
         passes = snapshots.flatMap { snapshot -> [PassItem] in
             guard let satellite = byID[snapshot.catalogNumber] else { return [] }
